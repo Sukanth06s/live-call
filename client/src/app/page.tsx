@@ -139,7 +139,7 @@ export default function Home() {
           <h1 className="text-4xl font-bold text-white tracking-tight">LiveRoom</h1>
           <p className="text-gray-400 text-lg">Secure real-time voice and AI transcription. Sign in to start chatting.</p>
           <button
-            onClick={() => signIn()}
+            onClick={() => signIn("credentials", { username: `User_${Math.floor(Math.random() * 1000)}`, callbackUrl: "/" })}
             className="w-full py-4 bg-white text-black font-bold rounded-2xl hover:bg-gray-200 transition-all shadow-xl active:scale-[0.98]"
           >
             Get Started
