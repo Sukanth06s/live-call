@@ -23,15 +23,19 @@ const {
 } = require("./rooms");
 
 const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
-const { DeepgramClient } = require("@deepgram/sdk");
+const { createClient } = require("@deepgram/sdk");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
 
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Deepgram using the v5 standard (KEEP THIS - it is the stable one)
-const deepgram = new DeepgramClient(process.env.DEEPGRAM_API_KEY);
+// Initialize Deepgram using the standard v3 factory
+const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
+console.log("DG CLIENT INITIALIZED");
+console.log("DG KEYS:", Object.keys(deepgram));
+console.log("DG LISTEN:", deepgram.listen ? "found" : "missing");
+console.log("DG TRANSCRIPTION:", deepgram.transcription ? "found" : "missing");
 
 const io = new Server(server, {
   cors: {
@@ -130,23 +134,10 @@ io.on("connection", (socket) => {
       };
 
       try {
-        // Pattern 1: Internal Hidden Method (Confirmed in your logs!)
-        if (deepgram._customListen && typeof deepgram._customListen.live === "function") {
-          console.log("[Deepgram] Using _customListen pattern");
-          dgConnection = deepgram._customListen.live(options);
-        }
-        // Pattern 2: Standard v5 (listen.live)
-        else if (deepgram.listen && typeof deepgram.listen.live === "function") {
-          console.log("[Deepgram] Using standard listen pattern");
-          dgConnection = deepgram.listen.live(options);
-        } 
-        // Pattern 3: Legacy fallback
-        else if (deepgram.transcription && typeof deepgram.transcription.live === "function") {
-          console.log("[Deepgram] Using legacy transcription pattern");
-          dgConnection = deepgram.transcription.live(options);
-        } else {
-          throw new Error("No live transcription method found on deepgram object");
-        }
+        // Standard v3 pattern
+        dgConnection = deepgram.listen.live(options);
+        
+        console.log("[Deepgram] v3 session created successfully");
 
         dgConnection.on("transcript", (data) => {
           const transcript = data.channel.alternatives[0].transcript;

@@ -8,7 +8,7 @@
     "dev": "node index.js"
   },
   "dependencies": {
-    "@deepgram/sdk": "^5.1.0",
+    "@deepgram/sdk": "^3.0.0",
     "agora-access-token": "^2.0.4",
     "cookie": "^1.1.1",
     "cors": "^2.8.5",
