@@ -83,7 +83,7 @@ export default function RoomPage({
         <div className="px-5 py-4 border-b border-white/[0.06]">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white">
-              {userName.charAt(0).toUpperCase()}
+              {(userName || "U").charAt(0).toUpperCase()}
             </div>
             <div>
               <p className="text-sm font-medium text-white">{userName}</p>

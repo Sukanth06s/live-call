@@ -121,7 +121,7 @@ export default function TranscriptPanel({ transcripts, currentUserId }: Transcri
                     <div
                       className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold bg-gradient-to-br ${getUserColor(entry.userId)} text-white flex-shrink-0`}
                     >
-                      {entry.userName.charAt(0).toUpperCase()}
+                      {(entry.userName || "U").charAt(0).toUpperCase()}
                     </div>
                     <span className={`text-[13px] font-semibold ${getTextColor(entry.userId)}`}>
                       {entry.userName}

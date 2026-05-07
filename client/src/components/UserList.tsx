@@ -37,7 +37,7 @@ export default function UserList({ users, currentUserId }: UserListProps) {
                   }
                 `}
               >
-                {user.name.charAt(0).toUpperCase()}
+                {(user.name || "U").charAt(0).toUpperCase()}
               </div>
               {/* Speaking indicator ring */}
               {user.isSpeaking && !user.isMuted && (
