@@ -37,18 +37,15 @@ export function useSocket() {
       setTranscripts(state.transcripts || []);
     });
 
-    socket.on("user-joined", (user: RoomUser) => {
-      setUsers((prev) => {
-        if (prev.find((u) => u.id === user.id)) return prev;
-        return [...prev, user];
-      });
+    socket.on("user-joined", ({ users }: { users: RoomUser[] }) => {
+      setUsers(users);
     });
 
     socket.on("user-left", ({ userId }: { userId: string }) => {
       setUsers((prev) => prev.filter((u) => u.id !== userId));
     });
 
-    socket.on("user-mute-toggle", ({ userId, isMuted }: { userId: string; isMuted: boolean }) => {
+    socket.on("user-muted", ({ userId, isMuted }: { userId: string; isMuted: boolean }) => {
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? { ...u, isMuted } : u))
       );
@@ -60,7 +57,7 @@ export function useSocket() {
       );
     });
 
-    socket.on("transcript", (entry: TranscriptEntry) => {
+    socket.on("transcript-update", (entry: TranscriptEntry) => {
       setTranscripts((prev) => {
         // De-duplicate final transcripts with same text and near-identical timestamp
         if (entry.isFinal) {

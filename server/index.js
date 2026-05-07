@@ -138,7 +138,7 @@ io.on("connection", (socket) => {
         
         console.log("[Deepgram] v3 session created successfully");
 
-        dgConnection.on("transcript", (data) => {
+        dgConnection.on("Results", (data) => {
           const transcript = data.channel.alternatives[0].transcript;
           if (transcript && transcript.trim()) {
             const entry = {
