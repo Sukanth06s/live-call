@@ -26,22 +26,21 @@ const deepgram = new DeepgramClient(process.env.DEEPGRAM_API_KEY);
 
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: "*", // Temporarily allow all for debugging
     methods: ["GET", "POST"],
     credentials: true,
   },
 });
 
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  origin: "*",
   credentials: true
 }));
 app.use(express.json());
 
-// Socket.IO Middleware: Trust connections from verified CORS origins
+// Socket.IO Debug Middleware
 io.use((socket, next) => {
-  // For cross-domain production setups, we trust the CORS origin lockdown
-  // and ensure the socket is marked as authenticated.
+  console.log(`[Socket] Attempting connection from: ${socket.handshake.headers.origin}`);
   socket.data.authenticated = true;
   next();
 });
