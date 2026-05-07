@@ -15,9 +15,9 @@ export function useSocket() {
 
   useEffect(() => {
     const socket = io(SOCKET_URL, {
-      transports: ["websocket", "polling"],
+      transports: ["polling", "websocket"], // Polling first for better compatibility
       autoConnect: true,
-      withCredentials: true, // Required to send NextAuth cookies to the backend
+      withCredentials: true,
     });
 
     socketRef.current = socket;
