@@ -127,7 +127,7 @@ io.on("connection", (socket) => {
   socket.on("audio-chunk", ({ roomId, audio }) => {
     if (!dgConnection) {
       console.log(`[Deepgram] Starting secure session for ${socket.id}`);
-      dgConnection = deepgram.listen.live.createConnection({
+      dgConnection = deepgram.listen.live({
         model: "nova-2",
         smart_format: true,
         encoding: "linear16",
