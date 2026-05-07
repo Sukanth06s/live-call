@@ -205,5 +205,5 @@ function handleLeave(socket) {
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`\n🚀 Live Room Server running on port ${PORT}\n`);
+  console.log(`[Railway] Server is active and listening on port ${PORT}`);
 });
