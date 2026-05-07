@@ -17,6 +17,7 @@ export function useSocket() {
     const socket = io(SOCKET_URL, {
       transports: ["websocket", "polling"],
       autoConnect: true,
+      withCredentials: true, // Required to send NextAuth cookies to the backend
     });
 
     socketRef.current = socket;

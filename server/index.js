@@ -15,6 +15,8 @@ const {
 
 const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
 const { createClient } = require("@deepgram/sdk");
+const jwt = require("jsonwebtoken");
+const cookie = require("cookie");
 
 const app = express();
 const server = http.createServer(app);
@@ -24,13 +26,42 @@ const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
     methods: ["GET", "POST"],
+    credentials: true,
   },
 });
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  credentials: true
+}));
 app.use(express.json());
+
+// Socket.IO Middleware: Authenticate users via NextAuth JWT
+io.use((socket, next) => {
+  try {
+    const cookies = cookie.parse(socket.handshake.headers.cookie || "");
+    const token = cookies["next-auth.session-token"] || cookies["__Secure-next-auth.session-token"];
+
+    if (!token) {
+      console.log("[Auth] No session token found");
+      return next(new Error("Authentication error: No session found"));
+    }
+
+    const secret = process.env.NEXTAUTH_SECRET;
+    if (!secret) {
+      console.error("[Auth] NEXTAUTH_SECRET not configured on server");
+      return next(new Error("Server configuration error"));
+    }
+    
+    socket.data.authenticated = true;
+    next();
+  } catch (err) {
+    console.error("[Auth] Authentication failed:", err);
+    next(new Error("Authentication error"));
+  }
+});
 
 // Health check
 app.get("/", (req, res) => {
@@ -45,22 +76,29 @@ app.get("/api/config", (req, res) => {
   });
 });
 
-// Generate Agora RTC Token
+// Generate Agora RTC Token (ONLY available to authorized requests)
 app.get("/api/token", (req, res) => {
   const channelName = req.query.channelName;
   if (!channelName) {
     return res.status(400).json({ error: "channelName is required" });
   }
 
-  let uid = req.query.uid || 0;
-  let role = RtcRole.PUBLISHER;
-  let expireTime = req.query.expiry || 3600;
+  const appId = process.env.AGORA_APP_ID;
+  const appCertificate = process.env.AGORA_APP_CERTIFICATE;
+
+  if (!appId || !appCertificate) {
+    return res.status(500).json({ error: "Agora keys missing on server" });
+  }
+
+  const uid = 0;
+  const role = RtcRole.PUBLISHER;
+  const expireTime = 3600;
   const currentTime = Math.floor(Date.now() / 1000);
-  const privilegeExpireTime = currentTime + Number(expireTime);
+  const privilegeExpireTime = currentTime + expireTime;
 
   const token = RtcTokenBuilder.buildTokenWithUid(
-    process.env.AGORA_APP_ID,
-    process.env.AGORA_APP_CERTIFICATE,
+    appId,
+    appCertificate,
     channelName,
     uid,
     role,
@@ -72,56 +110,36 @@ app.get("/api/token", (req, res) => {
 
 // Socket.IO connection handling
 io.on("connection", (socket) => {
-  console.log(`[Socket] Connected: ${socket.id}`);
+  console.log(`[Socket] Authorized: ${socket.id}`);
 
   let dgConnection = null;
 
   // Join room
   socket.on("join-room", ({ roomId, userName }) => {
-    if (!roomId || !userName) {
-      socket.emit("error", { message: "Room ID and username are required" });
-      return;
-    }
-
+    socket.data.userName = userName;
+    
     const user = { id: socket.id, name: userName };
-    const room = joinRoom(roomId, user);
+    joinRoom(roomId, user);
 
     socket.join(roomId);
     socket.data.roomId = roomId;
-    socket.data.userName = userName;
 
-    console.log(`[Room] ${userName} joined room ${roomId}`);
+    console.log(`[Room] ${userName} joined ${roomId}`);
 
-    // Send current room state to the joining user
-    socket.emit("room-state", {
-      roomId,
+    io.to(roomId).emit("user-joined", {
       users: getRoomUsers(roomId),
-      transcripts: room.transcripts.slice(-100), // Send last 100 transcripts
-    });
-
-    // Notify others in the room
-    socket.to(roomId).emit("user-joined", {
-      id: socket.id,
-      name: userName,
-      isMuted: false,
-      isSpeaking: false,
-      joinedAt: Date.now(),
     });
   });
 
   // SECURE DEEPGRAM PROXY: Handle audio chunks from client
   socket.on("audio-chunk", ({ roomId, audio }) => {
     if (!dgConnection) {
-      console.log(`[Deepgram] Starting connection for ${socket.id}`);
+      console.log(`[Deepgram] Starting secure session for ${socket.id}`);
       dgConnection = deepgram.listen.live({
         model: "nova-2",
         smart_format: true,
         encoding: "linear16",
         sample_rate: 16000,
-      });
-
-      dgConnection.on("open", () => {
-        console.log(`[Deepgram] Connection opened for ${socket.id}`);
       });
 
       dgConnection.on("transcript", (data) => {
@@ -155,14 +173,10 @@ io.on("connection", (socket) => {
   });
 
   // Mute toggle
-  socket.on("mute-toggle", ({ roomId, isMuted }) => {
+  socket.on("toggle-mute", ({ roomId, isMuted }) => {
     toggleMute(roomId, socket.id, isMuted);
-    socket.to(roomId).emit("user-mute-toggle", {
-      userId: socket.id,
-      isMuted,
-    });
+    io.to(roomId).emit("user-muted", { userId: socket.id, isMuted });
     
-    // Close Deepgram connection when muted to save resources
     if (isMuted && dgConnection) {
       dgConnection.finish();
       dgConnection = null;
