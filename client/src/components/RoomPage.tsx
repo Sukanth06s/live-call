@@ -79,22 +79,7 @@ export default function RoomPage({
           </button>
         </div>
 
-        {/* Current user info */}
-        <div className="px-5 py-4 border-b border-white/[0.06]">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white">
-              {(userName || "U").charAt(0).toUpperCase()}
-            </div>
-            <div>
-              <p className="text-sm font-medium text-white">{userName}</p>
-              <p className="text-[10px] text-gray-500">
-                {isMuted ? "Muted" : "Speaking enabled"}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* User list */}
+        {/* Participants section */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
           <UserList users={users} currentUserId={currentUserId} />
         </div>

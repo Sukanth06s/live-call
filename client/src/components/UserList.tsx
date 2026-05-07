@@ -13,7 +13,7 @@ export default function UserList({ users, currentUserId }: UserListProps) {
     <div className="space-y-2">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-          In Room — {users.length}
+          Participants — {users.length}
         </h3>
         <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
       </div>
@@ -57,6 +57,15 @@ export default function UserList({ users, currentUserId }: UserListProps) {
                 {user.name}
                 {user.id === currentUserId && (
                   <span className="ml-1.5 text-[10px] font-semibold text-blue-400 uppercase">(You)</span>
+                )}
+              </p>
+              <p className="text-[10px] text-gray-500">
+                {user.isSpeaking && !user.isMuted ? (
+                  <span className="text-emerald-400 font-medium">Speaking...</span>
+                ) : user.isMuted ? (
+                  <span>Muted</span>
+                ) : (
+                  <span>Ready</span>
                 )}
               </p>
             </div>

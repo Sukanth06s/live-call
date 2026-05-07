@@ -63,8 +63,8 @@ export function useSocket() {
     });
 
     socket.on("transcript-update", (entry: TranscriptEntry) => {
+      // 1. Update transcripts state
       setTranscripts((prev) => {
-        // De-duplicate final transcripts with same text and near-identical timestamp
         if (entry.isFinal) {
           const isDuplicate = prev.some(
             (t) => t.isFinal && t.text === entry.text && Math.abs(t.timestamp - entry.timestamp) < 2000
@@ -72,7 +72,6 @@ export function useSocket() {
           if (isDuplicate) return prev;
         }
 
-        // If it's a partial update, replace existing partial from same user
         if (!entry.isFinal) {
           const existingIdx = prev.findIndex(
             (t) => t.userId === entry.userId && !t.isFinal
@@ -84,12 +83,23 @@ export function useSocket() {
           }
           return [...prev, entry];
         }
-        // Final transcript: remove any partial from same user and add final
         const filtered = prev.filter(
           (t) => !(t.userId === entry.userId && !t.isFinal)
         );
         return [...filtered, entry];
       });
+
+      // 2. Set temporary speaking indicator
+      setUsers((prev) =>
+        prev.map((u) => (u.id === entry.userId ? { ...u, isSpeaking: true } : u))
+      );
+      
+      // Auto-reset speaking indicator after 1.5s
+      setTimeout(() => {
+        setUsers((prev) =>
+          prev.map((u) => (u.id === entry.userId ? { ...u, isSpeaking: false } : u))
+        );
+      }, 1500);
     });
 
     return () => {

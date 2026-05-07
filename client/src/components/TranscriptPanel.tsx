@@ -67,9 +67,13 @@ export default function TranscriptPanel({ transcripts, currentUserId }: Transcri
   // Auto-scroll to bottom on new transcript
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: "smooth",
+      const scrollContainer = scrollRef.current;
+      // Use requestAnimationFrame to ensure DOM is updated
+      requestAnimationFrame(() => {
+        scrollContainer.scrollTo({
+          top: scrollContainer.scrollHeight,
+          behavior: "smooth",
+        });
       });
     }
   }, [transcripts]);
