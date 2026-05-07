@@ -6,11 +6,12 @@ import { motion } from "framer-motion";
 interface LobbyProps {
   onJoinRoom: (roomId: string, userName: string, token?: string) => void;
   isConnected: boolean;
+  defaultName?: string;
 }
 
-export default function Lobby({ onJoinRoom, isConnected }: LobbyProps) {
+export default function Lobby({ onJoinRoom, isConnected, defaultName }: LobbyProps) {
   const [roomId, setRoomId] = useState("");
-  const [userName, setUserName] = useState("");
+  const [userName, setUserName] = useState(defaultName || "");
   const [token, setToken] = useState("");
   const [mode, setMode] = useState<"join" | "create">("join");
 
