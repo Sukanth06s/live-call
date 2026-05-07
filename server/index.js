@@ -23,15 +23,15 @@ const {
 } = require("./rooms");
 
 const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
-const { DeepgramClient } = require("@deepgram/sdk");
+const { createClient } = require("@deepgram/sdk");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
 
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Deepgram using the direct Client constructor (v5+ standard)
-const deepgram = new DeepgramClient(process.env.DEEPGRAM_API_KEY);
+// Initialize Deepgram using the factory method (v3/v5 compatible)
+const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
 const io = new Server(server, {
   cors: {
@@ -126,13 +126,25 @@ io.on("connection", (socket) => {
   // SECURE DEEPGRAM PROXY: Handle audio chunks from client
   socket.on("audio-chunk", ({ roomId, audio }) => {
     if (!dgConnection) {
+      console.log(`[Deepgram] Diagnostic - Keys:`, Object.keys(deepgram));
       console.log(`[Deepgram] Starting secure session for ${socket.id}`);
-      dgConnection = deepgram.listen.live({
+      
+      const options = {
         model: "nova-2",
         smart_format: true,
         encoding: "linear16",
         sample_rate: 16000,
-      });
+      };
+
+      // Safe-check for both new (listen.live) and old (transcription.live) v3/v5 patterns
+      if (deepgram.listen && typeof deepgram.listen.live === 'function') {
+        dgConnection = deepgram.listen.live(options);
+      } else if (deepgram.transcription && typeof deepgram.transcription.live === 'function') {
+        dgConnection = deepgram.transcription.live(options);
+      } else {
+        console.error("[Deepgram] CRITICAL: Could not find live transcription method in SDK");
+        return;
+      }
 
       dgConnection.on("transcript", (data) => {
         const transcript = data.channel.alternatives[0].transcript;
