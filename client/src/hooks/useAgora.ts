@@ -78,7 +78,9 @@ export function useAgora() {
   const toggleMute = useCallback(async () => {
     if (localTrackRef.current) {
       const newMuted = !isMuted;
-      await localTrackRef.current.setEnabled(!newMuted);
+      // Using setMuted (Soft Mute) instead of setEnabled (Hard Mute)
+      // This keeps the microphone hardware active and stable.
+      await localTrackRef.current.setMuted(newMuted);
       setIsMuted(newMuted);
       return newMuted;
     }

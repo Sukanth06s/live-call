@@ -28,6 +28,12 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
       
       const audioContext = audioCtxRef.current;
 
+      // MOBILE FIX: Automatically resume if suspended
+      if (audioContext.state === "suspended") {
+        console.log("[Deepgram Proxy] Resuming suspended AudioContext");
+        await audioContext.resume();
+      }
+
       if (!processorRef.current) {
         console.log("[Deepgram Proxy] Creating persistent Processor");
         const processor = audioContext.createScriptProcessor(4096, 1, 1);
