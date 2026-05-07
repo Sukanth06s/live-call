@@ -34,8 +34,7 @@ const server = http.createServer(app);
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 console.log("DG CLIENT INITIALIZED");
 console.log("DG KEYS:", Object.keys(deepgram));
-console.log("DG LISTEN:", deepgram.listen ? "found" : "missing");
-console.log("DG TRANSCRIPTION:", deepgram.transcription ? "found" : "missing");
+console.log("DG LISTEN: found");
 
 const io = new Server(server, {
   cors: {
