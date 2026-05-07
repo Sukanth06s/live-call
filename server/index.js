@@ -1,4 +1,12 @@
 require("dotenv").config();
+// Global error catcher to debug Railway crashes
+process.on("uncaughtException", (err) => {
+  console.error("[CRITICAL] Uncaught Exception:", err);
+});
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[CRITICAL] Unhandled Rejection at:", promise, "reason:", reason);
+});
+
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -7,6 +15,7 @@ const {
   joinRoom,
   leaveRoom,
   getRoomUsers,
+  getRoomTranscripts,
   toggleMute,
   setSpeaking,
   addTranscript,
