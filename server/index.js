@@ -109,6 +109,7 @@ io.on("connection", (socket) => {
 
   let dgConnection = null;
   let isDeepgramConnecting = false;
+  let audioQueue = [];
 
   // Join Room
   socket.on("join-room", ({ roomId, userName }) => {
@@ -123,6 +124,7 @@ io.on("connection", (socket) => {
   socket.on("audio-chunk", ({ roomId, audio }) => {
     if (!dgConnection && !isDeepgramConnecting) {
       isDeepgramConnecting = true;
+      audioQueue = []; // Reset queue for new session
       console.log(`[Deepgram] Starting session for: ${socket.data.userName || "Guest"}`);
       
       const options = {
@@ -136,9 +138,9 @@ io.on("connection", (socket) => {
         // Standard v3 pattern
         dgConnection = deepgram.listen.live(options);
         
-        console.log("[Deepgram] v3 session created successfully");
-
         dgConnection.on("Results", (data) => {
+          console.log("[Deepgram] RESULT:", JSON.stringify(data));
+          
           const transcript = data.channel.alternatives[0].transcript;
           if (transcript && transcript.trim()) {
             const entry = {
@@ -154,26 +156,45 @@ io.on("connection", (socket) => {
           }
         });
 
-        dgConnection.on("open", () => {
-          console.log("[Deepgram] Connection established");
+        dgConnection.on("Open", () => {
+          console.log("[Deepgram] Connection READY. Flushing queue:", audioQueue.length);
           isDeepgramConnecting = false;
+          // Flush any queued audio
+          while (audioQueue.length > 0) {
+            const chunk = audioQueue.shift();
+            dgConnection.send(chunk);
+          }
         });
 
-        dgConnection.on("error", (err) => {
-          console.error("[Deepgram] SDK Error:", err);
+        dgConnection.on("Close", () => {
+          console.log("[Deepgram] Connection closed");
           dgConnection = null;
           isDeepgramConnecting = false;
         });
 
+        dgConnection.on("Error", (err) => {
+          console.error("[Deepgram] SDK ERROR:", err);
+          dgConnection = null;
+          isDeepgramConnecting = false;
+          audioQueue = [];
+        });
+
       } catch (err) {
-        console.error("[Deepgram] Safety Net caught crash:", err.message);
+        console.error("[Deepgram] Crash caught:", err.message);
         dgConnection = null;
         isDeepgramConnecting = false;
+        audioQueue = [];
       }
     }
 
+    // Process chunk
     if (dgConnection && dgConnection.getReadyState && dgConnection.getReadyState() === 1) {
+      // Connection is open, send directly
       dgConnection.send(audio);
+    } else if (isDeepgramConnecting) {
+      // Connection is opening, queue the audio
+      audioQueue.push(audio);
+      if (audioQueue.length > 100) audioQueue.shift(); // Safety limit (approx 4-5 seconds)
     }
   });
 
