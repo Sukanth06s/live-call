@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useSocket } from "@/hooks/useSocket";
 import { useAgora } from "@/hooks/useAgora";
@@ -47,6 +47,19 @@ export default function Home() {
     isTranscribing,
   } = useDeepgram({ socket, roomId });
 
+  // 1. Permanent Transcription Lifecycle
+  // This effect ensures transcription starts as soon as we have a track
+  // and automatically 're-plugs' if Agora replaces the track.
+  useEffect(() => {
+    if (inRoom && !isMuted) {
+      const stream = getMediaStream();
+      if (stream) {
+        startTranscription(stream);
+      }
+    }
+    // We do NOT stop transcription on mute/unmute anymore to keep the pipeline warm
+  }, [inRoom, isMuted, getMediaStream, startTranscription]);
+
   const handleJoinRoom = useCallback(
     async (newRoomId: string, newUserName: string, token?: string) => {
       try {
@@ -54,47 +67,36 @@ export default function Home() {
         setUserName(newUserName);
         roomIdRef.current = newRoomId;
 
-        // 1. Join socket room
         joinRoom(newRoomId, newUserName);
 
-        // 2. Fetch Agora token if not provided manually
         let agoraToken = token;
         if (!agoraToken) {
           try {
-            // Updated to use the REMOTE Railway backend
             const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
             const res = await fetch(`${socketUrl}/api/token?channelName=${newRoomId}`);
             const data = await res.json();
             agoraToken = data.token;
           } catch (e) {
-            console.error("Auto-token fetch failed, falling back to null:", e);
+            console.error("Auto-token fetch failed:", e);
           }
         }
 
-        // 3. Join Agora voice channel
-        const track = await joinChannel(newRoomId, agoraToken);
-
-        // 4. Start Deepgram transcription using the Agora track
-        const stream = getMediaStream();
-        if (stream) {
-          await startTranscription(stream);
-        }
-
+        // Just join Agora. The useEffect above will handle starting Deepgram.
+        await joinChannel(newRoomId, agoraToken);
         setInRoom(true);
       } catch (err) {
         console.error("Failed to join room:", err);
-        // Cleanup on failure
         socketLeaveRoom();
         await leaveChannel();
         stopTranscription();
       }
     },
-    [joinRoom, joinChannel, startTranscription, socketLeaveRoom, leaveChannel, stopTranscription]
+    [joinRoom, joinChannel, socketLeaveRoom, leaveChannel, stopTranscription]
   );
 
   const handleLeaveRoom = useCallback(async () => {
     try {
-      stopTranscription();
+      stopTranscription(); // Final cleanup
       await leaveChannel();
       socketLeaveRoom();
       setInRoom(false);
@@ -109,16 +111,8 @@ export default function Home() {
   const handleToggleMute = useCallback(async () => {
     const newMuted = await agoraToggleMute();
     emitMuteToggle(roomId, newMuted);
-    
-    if (newMuted) {
-      stopTranscription();
-    } else {
-      const stream = getMediaStream();
-      if (stream) {
-        await startTranscription(stream);
-      }
-    }
-  }, [agoraToggleMute, emitMuteToggle, roomId, stopTranscription, startTranscription, getMediaStream]);
+    // Transcription lifecycle is now handled automatically by the useEffect
+  }, [agoraToggleMute, emitMuteToggle, roomId]);
 
   // Loading state
   if (status === "loading") {
