@@ -130,16 +130,19 @@ io.on("connection", (socket) => {
       };
 
       try {
-        // Pattern 1: Standard v3/v5 (listen.live)
-        if (deepgram.listen && typeof deepgram.listen.live === "function") {
-          dgConnection = deepgram.listen.live(options);
-        } 
-        // Pattern 2: Internal fallback (discovered from your logs!)
-        else if (deepgram._customListen && typeof deepgram._customListen.live === "function") {
+        // Pattern 1: Internal Hidden Method (Confirmed in your logs!)
+        if (deepgram._customListen && typeof deepgram._customListen.live === "function") {
+          console.log("[Deepgram] Using _customListen pattern");
           dgConnection = deepgram._customListen.live(options);
         }
-        // Pattern 3: Legacy/Alt pattern
+        // Pattern 2: Standard v5 (listen.live)
+        else if (deepgram.listen && typeof deepgram.listen.live === "function") {
+          console.log("[Deepgram] Using standard listen pattern");
+          dgConnection = deepgram.listen.live(options);
+        } 
+        // Pattern 3: Legacy fallback
         else if (deepgram.transcription && typeof deepgram.transcription.live === "function") {
+          console.log("[Deepgram] Using legacy transcription pattern");
           dgConnection = deepgram.transcription.live(options);
         } else {
           throw new Error("No live transcription method found on deepgram object");
