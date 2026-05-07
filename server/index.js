@@ -105,28 +105,22 @@ io.on("connection", (socket) => {
   console.log(`[Socket] Authorized: ${socket.id}`);
 
   let dgConnection = null;
+  let isDeepgramConnecting = false;
 
-  // Join room
+  // Join Room
   socket.on("join-room", ({ roomId, userName }) => {
+    console.log(`[Room] ${userName} joining room ${roomId}`);
     socket.data.userName = userName;
-    
     joinRoom(roomId, socket.id, userName);
-
     socket.join(roomId);
-    socket.data.roomId = roomId;
-
-    console.log(`[Room] ${userName} joined ${roomId}`);
-
-    io.to(roomId).emit("user-joined", {
-      users: getRoomUsers(roomId),
-    });
+    io.to(roomId).emit("user-joined", { users: getRoomUsers(roomId) });
   });
 
-  // SECURE DEEPGRAM PROXY: Handle audio chunks from client
+  // SECURE DEEPGRAM PROXY
   socket.on("audio-chunk", ({ roomId, audio }) => {
-    if (!dgConnection) {
-      console.log(`[Deepgram] Diagnostic - Keys:`, Object.keys(deepgram));
-      console.log(`[Deepgram] Starting secure session for ${socket.id}`);
+    if (!dgConnection && !isDeepgramConnecting) {
+      isDeepgramConnecting = true;
+      console.log(`[Deepgram] Starting session for: ${socket.data.userName || "Guest"}`);
       
       const options = {
         model: "nova-2",
@@ -135,40 +129,57 @@ io.on("connection", (socket) => {
         sample_rate: 16000,
       };
 
-      // Safe-check transcription pattern
-      if (deepgram.listen && typeof deepgram.listen.live === 'function') {
-        dgConnection = deepgram.listen.live(options);
-      } else {
-        // Fallback for different v5 minor versions
-        dgConnection = deepgram.transcription.live(options);
-      }
-
-      dgConnection.on("transcript", (data) => {
-        const transcript = data.channel.alternatives[0].transcript;
-        if (transcript && transcript.trim()) {
-          const entry = {
-            id: `${socket.id}-${Date.now()}`,
-            userId: socket.id,
-            userName: socket.data.userName || "Unknown",
-            text: transcript,
-            timestamp: Date.now(),
-            isFinal: data.is_final,
-          };
-
-          if (data.is_final) {
-            addTranscript(roomId, entry);
-          }
-
-          io.to(roomId).emit("transcript", entry);
+      try {
+        // Pattern 1: Standard v3/v5 (listen.live)
+        if (deepgram.listen && typeof deepgram.listen.live === "function") {
+          dgConnection = deepgram.listen.live(options);
+        } 
+        // Pattern 2: Internal fallback (discovered from your logs!)
+        else if (deepgram._customListen && typeof deepgram._customListen.live === "function") {
+          dgConnection = deepgram._customListen.live(options);
         }
-      });
+        // Pattern 3: Legacy/Alt pattern
+        else if (deepgram.transcription && typeof deepgram.transcription.live === "function") {
+          dgConnection = deepgram.transcription.live(options);
+        } else {
+          throw new Error("No live transcription method found on deepgram object");
+        }
 
-      dgConnection.on("error", (err) => {
-        console.error(`[Deepgram] Error:`, err);
-      });
+        dgConnection.on("transcript", (data) => {
+          const transcript = data.channel.alternatives[0].transcript;
+          if (transcript && transcript.trim()) {
+            const entry = {
+              id: `${socket.id}-${Date.now()}`,
+              userId: socket.id,
+              userName: socket.data.userName || "Guest",
+              text: transcript,
+              timestamp: Date.now(),
+              isFinal: data.is_final,
+            };
+            if (data.is_final) addTranscript(roomId, entry);
+            io.to(roomId).emit("transcript-update", entry);
+          }
+        });
+
+        dgConnection.on("open", () => {
+          console.log("[Deepgram] Connection established");
+          isDeepgramConnecting = false;
+        });
+
+        dgConnection.on("error", (err) => {
+          console.error("[Deepgram] SDK Error:", err);
+          dgConnection = null;
+          isDeepgramConnecting = false;
+        });
+
+      } catch (err) {
+        console.error("[Deepgram] Safety Net caught crash:", err.message);
+        dgConnection = null;
+        isDeepgramConnecting = false;
+      }
     }
 
-    if (dgConnection && audio) {
+    if (dgConnection && dgConnection.getReadyState && dgConnection.getReadyState() === 1) {
       dgConnection.send(audio);
     }
   });
