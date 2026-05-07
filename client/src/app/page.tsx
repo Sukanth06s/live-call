@@ -109,7 +109,16 @@ export default function Home() {
   const handleToggleMute = useCallback(async () => {
     const newMuted = await agoraToggleMute();
     emitMuteToggle(roomId, newMuted);
-  }, [agoraToggleMute, emitMuteToggle, roomId]);
+    
+    if (newMuted) {
+      stopTranscription();
+    } else {
+      const stream = getMediaStream();
+      if (stream) {
+        await startTranscription(stream);
+      }
+    }
+  }, [agoraToggleMute, emitMuteToggle, roomId, stopTranscription, startTranscription, getMediaStream]);
 
   // Loading state
   if (status === "loading") {

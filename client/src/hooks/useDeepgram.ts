@@ -19,58 +19,59 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
   const [isTranscribing, setIsTranscribing] = useState(false);
 
   const startTranscription = useCallback(async (externalStream: MediaStream) => {
-    if (isTranscribing) return;
     try {
-      console.log("[Deepgram Proxy] Starting transcription from external stream");
-
-      const audioContext = new AudioContext({ sampleRate: 16000 });
-      audioCtxRef.current = audioContext;
+      // 1. Initialize AudioContext and Processor only ONCE
+      if (!audioCtxRef.current) {
+        console.log("[Deepgram Proxy] Creating persistent AudioContext");
+        audioCtxRef.current = new AudioContext({ sampleRate: 16000 });
+      }
       
+      const audioContext = audioCtxRef.current;
+
+      if (!processorRef.current) {
+        console.log("[Deepgram Proxy] Creating persistent Processor");
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processor.onaudioprocess = (e) => {
+          if (socket && socket.connected) {
+            const inputData = e.inputBuffer.getChannelData(0);
+            const int16Data = new Int16Array(inputData.length);
+            for (let i = 0; i < inputData.length; i++) {
+              const s = Math.max(-1, Math.min(1, inputData[i]));
+              int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            }
+            socket.emit("audio-chunk", { roomId, audio: int16Data.buffer });
+          }
+        };
+        processorRef.current = processor;
+        processor.connect(audioContext.destination);
+      }
+
+      // 2. Hot-Swap the Source
+      if (sourceRef.current) {
+        console.log("[Deepgram Proxy] Unplugging old source track");
+        sourceRef.current.disconnect();
+      }
+
+      console.log("[Deepgram Proxy] Plugging in new source track");
       const source = audioContext.createMediaStreamSource(externalStream);
       sourceRef.current = source;
-
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
-
-      source.connect(processor);
-      processor.connect(audioContext.destination);
-
-      processor.onaudioprocess = (e) => {
-        if (socket && socket.connected) {
-          const inputData = e.inputBuffer.getChannelData(0);
-          // Convert float32 to int16
-          const int16Data = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            const s = Math.max(-1, Math.min(1, inputData[i]));
-            int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-          }
-          // Send raw audio chunk to backend proxy
-          socket.emit("audio-chunk", { roomId, audio: int16Data.buffer });
-        }
-      };
+      source.connect(processorRef.current);
 
       setIsTranscribing(true);
 
     } catch (err) {
-      console.error("[Deepgram Proxy] Failed to start:", err);
+      console.error("[Deepgram Proxy] Failed to start/swap:", err);
     }
-  }, [isTranscribing, socket, roomId]);
+  }, [socket, roomId]);
 
   const stopTranscription = useCallback(() => {
-    if (processorRef.current) {
-      processorRef.current.disconnect();
-      processorRef.current = null;
-    }
     if (sourceRef.current) {
       sourceRef.current.disconnect();
       sourceRef.current = null;
     }
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close();
-      audioCtxRef.current = null;
-    }
+    // Note: We keep the processor and context alive for possible unmuting
     setIsTranscribing(false);
-    console.log("[Deepgram Proxy] Audio streaming stopped");
+    console.log("[Deepgram Proxy] Transcription paused (Source unplugged)");
   }, []);
 
   return {
