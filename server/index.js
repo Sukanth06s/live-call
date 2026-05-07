@@ -14,9 +14,13 @@ const {
 } = require("./rooms");
 
 const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
+const { createClient } = require("@deepgram/sdk");
 
 const app = express();
 const server = http.createServer(app);
+
+// Initialize Deepgram
+const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
 const io = new Server(server, {
   cors: {
@@ -70,6 +74,8 @@ app.get("/api/token", (req, res) => {
 io.on("connection", (socket) => {
   console.log(`[Socket] Connected: ${socket.id}`);
 
+  let dgConnection = null;
+
   // Join room
   socket.on("join-room", ({ roomId, userName }) => {
     if (!roomId || !userName) {
@@ -103,23 +109,49 @@ io.on("connection", (socket) => {
     });
   });
 
-  // Transcript event
-  socket.on("transcript", ({ roomId, transcript, isFinal }) => {
-    const entry = {
-      id: `${socket.id}-${Date.now()}`,
-      userId: socket.id,
-      userName: socket.data.userName || "Unknown",
-      text: transcript,
-      isFinal,
-      timestamp: Date.now(),
-    };
+  // SECURE DEEPGRAM PROXY: Handle audio chunks from client
+  socket.on("audio-chunk", ({ roomId, audio }) => {
+    if (!dgConnection) {
+      console.log(`[Deepgram] Starting connection for ${socket.id}`);
+      dgConnection = deepgram.listen.live({
+        model: "nova-2",
+        smart_format: true,
+        encoding: "linear16",
+        sample_rate: 16000,
+      });
 
-    if (isFinal && transcript.trim()) {
-      addTranscript(roomId, entry);
+      dgConnection.on("open", () => {
+        console.log(`[Deepgram] Connection opened for ${socket.id}`);
+      });
+
+      dgConnection.on("transcript", (data) => {
+        const transcript = data.channel.alternatives[0].transcript;
+        if (transcript && transcript.trim()) {
+          const entry = {
+            id: `${socket.id}-${Date.now()}`,
+            userId: socket.id,
+            userName: socket.data.userName || "Unknown",
+            text: transcript,
+            timestamp: Date.now(),
+            isFinal: data.is_final,
+          };
+
+          if (data.is_final) {
+            addTranscript(roomId, entry);
+          }
+
+          io.to(roomId).emit("transcript", entry);
+        }
+      });
+
+      dgConnection.on("error", (err) => {
+        console.error(`[Deepgram] Error:`, err);
+      });
     }
 
-    // Broadcast to ALL users in the room (including sender for sync)
-    io.in(roomId).emit("transcript", entry);
+    if (dgConnection && audio) {
+      dgConnection.send(audio);
+    }
   });
 
   // Mute toggle
@@ -129,6 +161,12 @@ io.on("connection", (socket) => {
       userId: socket.id,
       isMuted,
     });
+    
+    // Close Deepgram connection when muted to save resources
+    if (isMuted && dgConnection) {
+      dgConnection.finish();
+      dgConnection = null;
+    }
   });
 
   // Speaking indicator
@@ -147,6 +185,10 @@ io.on("connection", (socket) => {
 
   // Disconnect
   socket.on("disconnect", () => {
+    if (dgConnection) {
+      dgConnection.finish();
+      dgConnection = null;
+    }
     console.log(`[Socket] Disconnected: ${socket.id}`);
     handleLeave(socket);
   });

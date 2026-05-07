@@ -8,6 +8,7 @@
     "dev": "node index.js"
   },
   "dependencies": {
+    "@deepgram/sdk": "^5.1.0",
     "agora-access-token": "^2.0.4",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

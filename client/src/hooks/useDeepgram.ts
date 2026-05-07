@@ -2,20 +2,19 @@
 
 import { useRef, useCallback, useState } from "react";
 
-const DEEPGRAM_API_KEY = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY || "";
-
 interface UseDeepgramOptions {
-  onTranscript: (text: string, isFinal: boolean) => void;
+  socket: any;
+  roomId: string;
 }
 
-export function useDeepgram({ onTranscript }: UseDeepgramOptions) {
-  const wsRef = useRef<WebSocket | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
   const streamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
 
   const startTranscription = useCallback(async () => {
-    if (wsRef.current || isTranscribing) return;
+    if (isTranscribing) return;
     try {
       // Get microphone stream
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -27,93 +26,53 @@ export function useDeepgram({ onTranscript }: UseDeepgramOptions) {
       });
       streamRef.current = stream;
 
-      // Connect to Deepgram WebSocket
-      const ws = new WebSocket(
-        `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1&punctuate=true&interim_results=true&endpointing=300`,
-        ["token", DEEPGRAM_API_KEY]
-      );
+      const audioContext = new AudioContext({ sampleRate: 16000 });
+      audioCtxRef.current = audioContext;
+      
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
 
-      wsRef.current = ws;
+      source.connect(processor);
+      processor.connect(audioContext.destination);
 
-      ws.onopen = () => {
-        console.log("[Deepgram] WebSocket connected");
-        setIsTranscribing(true);
-
-        // Use AudioContext + ScriptProcessor/AudioWorklet to send raw PCM
-        const audioContext = new AudioContext({ sampleRate: 16000 });
-        const source = audioContext.createMediaStreamSource(stream);
-        const processor = audioContext.createScriptProcessor(4096, 1, 1);
-
-        source.connect(processor);
-        processor.connect(audioContext.destination);
-
-        processor.onaudioprocess = (e) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            const inputData = e.inputBuffer.getChannelData(0);
-            // Convert float32 to int16
-            const int16Data = new Int16Array(inputData.length);
-            for (let i = 0; i < inputData.length; i++) {
-              const s = Math.max(-1, Math.min(1, inputData[i]));
-              int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-            }
-            ws.send(int16Data.buffer);
+      processor.onaudioprocess = (e) => {
+        if (socket && socket.connected) {
+          const inputData = e.inputBuffer.getChannelData(0);
+          // Convert float32 to int16
+          const int16Data = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) {
+            const s = Math.max(-1, Math.min(1, inputData[i]));
+            int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
           }
-        };
-
-        // Store for cleanup
-        (ws as any)._audioContext = audioContext;
-        (ws as any)._processor = processor;
-        (ws as any)._source = source;
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.channel?.alternatives?.[0]) {
-            const transcript = data.channel.alternatives[0].transcript;
-            const isFinal = data.is_final;
-            if (transcript && transcript.trim()) {
-              onTranscript(transcript, isFinal);
-            }
-          }
-        } catch (err) {
-          console.error("[Deepgram] Parse error:", err);
+          // Send raw audio chunk to backend proxy
+          socket.emit("audio-chunk", { roomId, audio: int16Data.buffer });
         }
       };
 
-      ws.onerror = (error) => {
-        console.error("[Deepgram] WebSocket error:", error);
-      };
+      setIsTranscribing(true);
+      console.log("[Deepgram Proxy] Audio streaming started");
 
-      ws.onclose = () => {
-        console.log("[Deepgram] WebSocket closed");
-        setIsTranscribing(false);
-        // Cleanup audio nodes
-        if ((ws as any)._processor) {
-          (ws as any)._processor.disconnect();
-        }
-        if ((ws as any)._source) {
-          (ws as any)._source.disconnect();
-        }
-        if ((ws as any)._audioContext) {
-          (ws as any)._audioContext.close();
-        }
-      };
     } catch (err) {
-      console.error("[Deepgram] Failed to start transcription:", err);
+      console.error("[Deepgram Proxy] Failed to start:", err);
     }
-  }, [onTranscript]);
+  }, [isTranscribing, socket, roomId]);
 
   const stopTranscription = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close();
+      audioCtxRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
     setIsTranscribing(false);
+    console.log("[Deepgram Proxy] Audio streaming stopped");
   }, []);
 
   return {

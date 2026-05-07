@@ -27,6 +27,7 @@ export default function Home() {
     leaveRoom: socketLeaveRoom,
     emitTranscript,
     emitMuteToggle,
+    socket, // We need the raw socket now
   } = useSocket();
 
   const {
@@ -39,20 +40,11 @@ export default function Home() {
 
   const roomIdRef = useRef("");
 
-  const handleTranscript = useCallback(
-    (text: string, isFinal: boolean) => {
-      if (roomIdRef.current) {
-        emitTranscript(roomIdRef.current, text, isFinal);
-      }
-    },
-    [emitTranscript]
-  );
-
   const {
     startTranscription,
     stopTranscription,
     isTranscribing,
-  } = useDeepgram({ onTranscript: handleTranscript });
+  } = useDeepgram({ socket, roomId });
 
   const handleJoinRoom = useCallback(
     async (newRoomId: string, newUserName: string, token?: string) => {
