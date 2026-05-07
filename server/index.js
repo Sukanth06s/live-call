@@ -26,14 +26,14 @@ const deepgram = new DeepgramClient(process.env.DEEPGRAM_API_KEY);
 
 const io = new Server(server, {
   cors: {
-    origin: true, // Dynamically allow the requesting origin
+    origin: (origin, callback) => callback(null, true),
     methods: ["GET", "POST"],
     credentials: true,
   },
 });
 
 app.use(cors({
-  origin: true,
+  origin: (origin, callback) => callback(null, true),
   credentials: true
 }));
 app.use(express.json());
@@ -204,6 +204,6 @@ function handleLeave(socket) {
 }
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`\n🚀 Live Room Server running on http://localhost:${PORT}\n`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`\n🚀 Live Room Server running on port ${PORT}\n`);
 });
