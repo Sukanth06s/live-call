@@ -60,8 +60,9 @@ export default function Home() {
         let agoraToken = token;
         if (!agoraToken) {
           try {
-            // Updated to use LOCAL Next.js API route
-            const res = await fetch(`/api/token?channelName=${newRoomId}`);
+            // Updated to use the REMOTE Railway backend
+            const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
+            const res = await fetch(`${socketUrl}/api/token?channelName=${newRoomId}`);
             const data = await res.json();
             agoraToken = data.token;
           } catch (e) {
