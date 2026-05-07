@@ -14,16 +14,15 @@ const {
 } = require("./rooms");
 
 const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
-const DeepgramSDK = require("@deepgram/sdk");
+const { DeepgramClient } = require("@deepgram/sdk");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
 
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Deepgram (handling both default and named exports)
-const createClient = DeepgramSDK.createClient || (DeepgramSDK.default && DeepgramSDK.default.createClient);
-const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
+// Initialize Deepgram using the direct Client constructor (v5+ standard)
+const deepgram = new DeepgramClient(process.env.DEEPGRAM_API_KEY);
 
 const io = new Server(server, {
   cors: {
@@ -136,7 +135,7 @@ io.on("connection", (socket) => {
   socket.on("audio-chunk", ({ roomId, audio }) => {
     if (!dgConnection) {
       console.log(`[Deepgram] Starting secure session for ${socket.id}`);
-      dgConnection = deepgram.listen.live({
+      dgConnection = deepgram.listen.live.createConnection({
         model: "nova-2",
         smart_format: true,
         encoding: "linear16",
@@ -179,7 +178,7 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("user-muted", { userId: socket.id, isMuted });
     
     if (isMuted && dgConnection) {
-      dgConnection.finish();
+      dgConnection.requestClose();
       dgConnection = null;
     }
   });
@@ -201,7 +200,7 @@ io.on("connection", (socket) => {
   // Disconnect
   socket.on("disconnect", () => {
     if (dgConnection) {
-      dgConnection.finish();
+      dgConnection.requestClose();
       dgConnection = null;
     }
     console.log(`[Socket] Disconnected: ${socket.id}`);
