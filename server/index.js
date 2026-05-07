@@ -14,14 +14,15 @@ const {
 } = require("./rooms");
 
 const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
-const { createClient } = require("@deepgram/sdk");
+const DeepgramSDK = require("@deepgram/sdk");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
 
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Deepgram
+// Initialize Deepgram (handling both default and named exports)
+const createClient = DeepgramSDK.createClient || (DeepgramSDK.default && DeepgramSDK.default.createClient);
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
 const io = new Server(server, {
