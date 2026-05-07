@@ -23,15 +23,15 @@ const {
 } = require("./rooms");
 
 const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
-const { createClient } = require("@deepgram/sdk");
+const { DeepgramClient } = require("@deepgram/sdk");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
 
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Deepgram using the factory (v5 standard)
-const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
+// Initialize Deepgram using the v5 standard (KEEP THIS - it is the stable one)
+const deepgram = new DeepgramClient(process.env.DEEPGRAM_API_KEY);
 
 const io = new Server(server, {
   cors: {
@@ -135,11 +135,11 @@ io.on("connection", (socket) => {
         sample_rate: 16000,
       };
 
-      // In v5, listen.live is the standard connection method
-      try {
+      // Safe-check transcription pattern
+      if (deepgram.listen && typeof deepgram.listen.live === 'function') {
         dgConnection = deepgram.listen.live(options);
-      } catch (err) {
-        console.error("[Deepgram] v5 init failed, trying fallback:", err);
+      } else {
+        // Fallback for different v5 minor versions
         dgConnection = deepgram.transcription.live(options);
       }
 
