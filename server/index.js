@@ -115,6 +115,7 @@ io.on("connection", (socket) => {
   socket.on("join-room", ({ roomId, userName }) => {
     console.log(`[Room] ${userName} joining room ${roomId}`);
     socket.data.userName = userName;
+    socket.data.roomId = roomId;
     joinRoom(roomId, socket.id, userName);
     socket.join(roomId);
     io.to(roomId).emit("user-joined", { users: getRoomUsers(roomId) });
@@ -155,12 +156,14 @@ io.on("connection", (socket) => {
 
             console.log(`[Deepgram] Emitting (${isFinal ? "FINAL" : "PARTIAL"}): ${transcript}`);
             
-            if (isFinal) {
-              addTranscript(roomId, entry);
+            const activeRoomId = roomId || socket.data.roomId;
+            
+            if (isFinal && activeRoomId) {
+              addTranscript(activeRoomId, entry);
             }
             
-            // Send to ALL users in the room
-            io.to(roomId).emit("transcript-update", entry);
+            // NUCLEAR TEST: Emit to EVERYONE
+            io.emit("transcript-update", entry);
           }
         });
 

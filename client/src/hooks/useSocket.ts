@@ -27,6 +27,11 @@ export function useSocket() {
       console.log("[Socket] Connected:", socket.id);
     });
 
+    // NUCLEAR DEBUG: Log EVERY event that arrives
+    socket.onAny((event, ...args) => {
+      console.log(`[Socket EVENT]: ${event}`, args);
+    });
+
     socket.on("disconnect", () => {
       setIsConnected(false);
       console.log("[Socket] Disconnected");
