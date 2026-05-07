@@ -26,21 +26,22 @@ const deepgram = new DeepgramClient(process.env.DEEPGRAM_API_KEY);
 
 const io = new Server(server, {
   cors: {
-    origin: "*", // Temporarily allow all for debugging
+    origin: true, // Dynamically allow the requesting origin
     methods: ["GET", "POST"],
     credentials: true,
   },
 });
 
 app.use(cors({
-  origin: "*",
+  origin: true,
   credentials: true
 }));
 app.use(express.json());
 
 // Socket.IO Debug Middleware
 io.use((socket, next) => {
-  console.log(`[Socket] Attempting connection from: ${socket.handshake.headers.origin}`);
+  const origin = socket.handshake.headers.origin;
+  console.log(`[Socket] Connection request from: ${origin}`);
   socket.data.authenticated = true;
   next();
 });
