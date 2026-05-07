@@ -1,0 +1,22 @@
+# dependencies
+node_modules
+
+# nextjs
+.next
+
+# env files
+.env
+.env.local
+
+# logs
+npm-debug.log*
+
+# mac
+.DS_Store
+
+# build
+dist
+build
+
+# vscode
+.vscode
