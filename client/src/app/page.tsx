@@ -34,6 +34,7 @@ export default function Home() {
     joinChannel,
     leaveChannel,
     toggleMute: agoraToggleMute,
+    getMediaStream,
     isMuted,
     isJoined: isAgoraJoined,
   } = useAgora();
@@ -71,10 +72,13 @@ export default function Home() {
         }
 
         // 3. Join Agora voice channel
-        await joinChannel(newRoomId, agoraToken);
+        const track = await joinChannel(newRoomId, agoraToken);
 
-        // 3. Start Deepgram transcription
-        await startTranscription();
+        // 4. Start Deepgram transcription using the Agora track
+        const stream = getMediaStream();
+        if (stream) {
+          await startTranscription(stream);
+        }
 
         setInRoom(true);
       } catch (err) {
@@ -105,14 +109,7 @@ export default function Home() {
   const handleToggleMute = useCallback(async () => {
     const newMuted = await agoraToggleMute();
     emitMuteToggle(roomId, newMuted);
-
-    // Stop/start transcription based on mute state
-    if (newMuted) {
-      stopTranscription();
-    } else {
-      await startTranscription();
-    }
-  }, [agoraToggleMute, emitMuteToggle, roomId, stopTranscription, startTranscription]);
+  }, [agoraToggleMute, emitMuteToggle, roomId]);
 
   // Loading state
   if (status === "loading") {

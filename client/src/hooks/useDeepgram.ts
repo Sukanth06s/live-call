@@ -7,29 +7,28 @@ interface UseDeepgramOptions {
   roomId: string;
 }
 
+interface UseDeepgramOptions {
+  socket: any;
+  roomId: string;
+}
+
 export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
-  const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
 
-  const startTranscription = useCallback(async () => {
+  const startTranscription = useCallback(async (externalStream: MediaStream) => {
     if (isTranscribing) return;
     try {
-      // Get microphone stream
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 16000,
-        },
-      });
-      streamRef.current = stream;
+      console.log("[Deepgram Proxy] Starting transcription from external stream");
 
       const audioContext = new AudioContext({ sampleRate: 16000 });
       audioCtxRef.current = audioContext;
       
-      const source = audioContext.createMediaStreamSource(stream);
+      const source = audioContext.createMediaStreamSource(externalStream);
+      sourceRef.current = source;
+
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
       processorRef.current = processor;
 
@@ -51,7 +50,6 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
       };
 
       setIsTranscribing(true);
-      console.log("[Deepgram Proxy] Audio streaming started");
 
     } catch (err) {
       console.error("[Deepgram Proxy] Failed to start:", err);
@@ -63,13 +61,13 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
       processorRef.current.disconnect();
       processorRef.current = null;
     }
+    if (sourceRef.current) {
+      sourceRef.current.disconnect();
+      sourceRef.current = null;
+    }
     if (audioCtxRef.current) {
       audioCtxRef.current.close();
       audioCtxRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
     }
     setIsTranscribing(false);
     console.log("[Deepgram Proxy] Audio streaming stopped");

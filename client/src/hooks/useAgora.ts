@@ -89,11 +89,20 @@ export function useAgora() {
     return localTrackRef.current;
   }, []);
 
+  const getMediaStream = useCallback(() => {
+    if (localTrackRef.current) {
+      const track = localTrackRef.current.getMediaStreamTrack();
+      return new MediaStream([track]);
+    }
+    return null;
+  }, []);
+
   return {
     joinChannel,
     leaveChannel,
     toggleMute,
     getLocalTrack,
+    getMediaStream,
     isMuted,
     isJoined,
     remoteUsers,
