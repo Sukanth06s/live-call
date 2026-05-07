@@ -139,19 +139,27 @@ io.on("connection", (socket) => {
         dgConnection = deepgram.listen.live(options);
         
         dgConnection.on("Results", (data) => {
-          console.log("[Deepgram] RESULT:", JSON.stringify(data));
-          
           const transcript = data.channel.alternatives[0].transcript;
           if (transcript && transcript.trim()) {
+            // Determine finality (Deepgram v3 uses is_final)
+            const isFinal = data.is_final === true || data.speech_final === true;
+            
             const entry = {
               id: `${socket.id}-${Date.now()}`,
               userId: socket.id,
               userName: socket.data.userName || "Guest",
               text: transcript,
               timestamp: Date.now(),
-              isFinal: data.is_final,
+              isFinal: isFinal,
             };
-            if (data.is_final) addTranscript(roomId, entry);
+
+            console.log(`[Deepgram] Emitting (${isFinal ? "FINAL" : "PARTIAL"}): ${transcript}`);
+            
+            if (isFinal) {
+              addTranscript(roomId, entry);
+            }
+            
+            // Send to ALL users in the room
             io.to(roomId).emit("transcript-update", entry);
           }
         });
