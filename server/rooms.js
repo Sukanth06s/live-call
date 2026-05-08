@@ -14,11 +14,11 @@ function createRoom(roomId) {
   return rooms.get(roomId);
 }
 
-function joinRoom(roomId, user) {
+function joinRoom(roomId, userId, userName) {
   const room = createRoom(roomId);
-  room.users.set(user.id, {
-    id: user.id,
-    name: user.name,
+  room.users.set(userId, {
+    id: userId,
+    name: userName,
     isMuted: false,
     isSpeaking: false,
     joinedAt: Date.now(),
@@ -47,6 +47,12 @@ function getRoomUsers(roomId) {
   const room = rooms.get(roomId);
   if (!room) return [];
   return Array.from(room.users.values());
+}
+
+function getRoomTranscripts(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return [];
+  return room.transcripts || [];
 }
 
 function toggleMute(roomId, userId, isMuted) {
@@ -95,6 +101,7 @@ module.exports = {
   leaveRoom,
   getRoom,
   getRoomUsers,
+  getRoomTranscripts,
   toggleMute,
   setSpeaking,
   addTranscript,

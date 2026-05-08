@@ -38,24 +38,13 @@ export function useSocket() {
     });
 
     socket.on("room-state", (state) => {
+      console.log("[Socket] Received room-state:", state);
       setUsers(state.users);
       setTranscripts(state.transcripts || []);
     });
 
-    socket.on("user-joined", ({ users }: { users: RoomUser[] }) => {
-      setUsers(users);
-    });
-
-    socket.on("user-left", ({ userId }: { userId: string }) => {
-      setUsers((prev) => prev.filter((u) => u.id !== userId));
-    });
-
-    socket.on("user-muted", ({ userId, isMuted }: { userId: string; isMuted: boolean }) => {
-      setUsers((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, isMuted } : u))
-      );
-    });
-
+    // We keep these for real-time speaking indicators only if needed, 
+    // but room-state will handle the rest.
     socket.on("user-speaking", ({ userId, isSpeaking }: { userId: string; isSpeaking: boolean }) => {
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? { ...u, isSpeaking } : u))

@@ -50,6 +50,17 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Helper to broadcast full canonical room state
+const broadcastRoomState = (roomId) => {
+  if (!roomId) return;
+  const state = {
+    users: getRoomUsers(roomId),
+    transcripts: getRoomTranscripts(roomId) || [],
+  };
+  console.log(`[Room] Broadcasting state for ${roomId} to ${state.users.length} users`);
+  io.to(roomId).emit("room-state", state);
+};
+
 // Socket.IO Debug Middleware
 io.use((socket, next) => {
   const origin = socket.handshake.headers.origin;
@@ -111,14 +122,21 @@ io.on("connection", (socket) => {
   let isDeepgramConnecting = false;
   let audioQueue = [];
 
+
   // Join Room
   socket.on("join-room", ({ roomId, userName }) => {
     console.log(`[Room] ${userName} joining room ${roomId}`);
     socket.data.userName = userName;
     socket.data.roomId = roomId;
+    
+    // 1. Update server state
     joinRoom(roomId, socket.id, userName);
+    
+    // 2. Join socket room
     socket.join(roomId);
-    io.to(roomId).emit("user-joined", { users: getRoomUsers(roomId) });
+    
+    // 3. Broadcast updated state to EVERYONE in the room
+    broadcastRoomState(roomId);
   });
 
   // SECURE DEEPGRAM PROXY
@@ -162,8 +180,10 @@ io.on("connection", (socket) => {
               addTranscript(activeRoomId, entry);
             }
             
-            // NUCLEAR TEST: Emit to EVERYONE
-            io.emit("transcript-update", entry);
+            // NUCLEAR TEST: Emit only to the ROOM
+            if (activeRoomId) {
+              io.to(activeRoomId).emit("transcript-update", entry);
+            }
           }
         });
 
@@ -212,7 +232,7 @@ io.on("connection", (socket) => {
   // Mute toggle
   socket.on("toggle-mute", ({ roomId, isMuted }) => {
     toggleMute(roomId, socket.id, isMuted);
-    io.to(roomId).emit("user-muted", { userId: socket.id, isMuted });
+    broadcastRoomState(roomId);
     
     if (isMuted && dgConnection) {
       dgConnection.requestClose();
@@ -249,7 +269,7 @@ function handleLeave(socket) {
   const roomId = socket.data.roomId;
   if (roomId) {
     leaveRoom(roomId, socket.id);
-    socket.to(roomId).emit("user-left", { userId: socket.id });
+    broadcastRoomState(roomId);
     socket.leave(roomId);
     console.log(`[Room] ${socket.data.userName} left room ${roomId}`);
     socket.data.roomId = null;
