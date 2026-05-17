@@ -148,13 +148,13 @@ io.on("connection", (socket) => {
   });
 
   // SECURE DEEPGRAM PROXY & TURN ENGINE
-  socket.on("audio-chunk", ({ roomId, audio, sampleRate }) => {
+  socket.on("audio-chunk", ({ roomId, userName: reqUserName, audio, sampleRate }) => {
     if (audio) {
       console.log("[PCM RECEIVED]", audio.byteLength);
     }
 
     const activeRoomId = roomId || socket.data.roomId;
-    const userName = socket.data.userName || "Guest";
+    const userName = reqUserName || socket.data.userName || "Guest";
     const speakerId = socket.id;
 
     if (!dgConnection && !isDeepgramConnecting) {

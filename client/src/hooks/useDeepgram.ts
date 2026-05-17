@@ -5,9 +5,10 @@ import { useRef, useCallback, useState } from "react";
 interface UseDeepgramOptions {
   socket: any;
   roomId: string;
+  userName: string;
 }
 
-export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
+export function useDeepgram({ socket, roomId, userName }: UseDeepgramOptions) {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -112,6 +113,7 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
             console.log("[PCM SENT]", pcmBuffer.byteLength);
             socket.emit("audio-chunk", { 
               roomId, 
+              userName,
               audio: pcmBuffer,
               sampleRate: audioContext.sampleRate
             });

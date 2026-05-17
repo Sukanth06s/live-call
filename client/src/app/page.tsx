@@ -47,7 +47,7 @@ export default function Home() {
     startTranscription,
     stopTranscription,
     isTranscribing,
-  } = useDeepgram({ socket, roomId });
+  } = useDeepgram({ socket, roomId, userName });
 
   // 1. Permanent Transcription Lifecycle
   // This effect manages the absolute clean construction and teardown of the audio pipeline.

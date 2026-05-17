@@ -12,6 +12,8 @@ if (SOCKET_URL && !SOCKET_URL.startsWith("http://") && !SOCKET_URL.startsWith("h
 
 export function useSocket() {
   const socketRef = useRef<Socket | null>(null);
+  const roomIdRef = useRef<string | null>(null);
+  const userNameRef = useRef<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [users, setUsers] = useState<RoomUser[]>([]);
   const [blocks, setBlocks] = useState<TranscriptBlock[]>([]);
@@ -19,7 +21,7 @@ export function useSocket() {
 
   useEffect(() => {
     const socket = io(SOCKET_URL, {
-      transports: ["polling", "websocket"], // Polling first for better compatibility
+      transports: ["websocket"],
       autoConnect: true,
       withCredentials: true,
     });
@@ -29,6 +31,10 @@ export function useSocket() {
     socket.on("connect", () => {
       setIsConnected(true);
       console.log("[Socket] Connected:", socket.id);
+      if (roomIdRef.current && userNameRef.current) {
+        console.log("[Socket] Reconnected. Auto-rejoining room:", roomIdRef.current, "as", userNameRef.current);
+        socket.emit("join-room", { roomId: roomIdRef.current, userName: userNameRef.current });
+      }
     });
 
     // NUCLEAR DEBUG: Log EVERY event that arrives
@@ -78,6 +84,8 @@ export function useSocket() {
 
   const joinRoom = useCallback((roomId: string, userName: string) => {
     if (socketRef.current) {
+      roomIdRef.current = roomId;
+      userNameRef.current = userName;
       socketRef.current.emit("join-room", { roomId, userName });
       setCurrentRoomId(roomId);
     }
@@ -85,6 +93,8 @@ export function useSocket() {
 
   const leaveRoom = useCallback(() => {
     if (socketRef.current) {
+      roomIdRef.current = null;
+      userNameRef.current = null;
       socketRef.current.emit("leave-room");
       setCurrentRoomId(null);
       setUsers([]);
