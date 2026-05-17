@@ -48,17 +48,18 @@ export default function Home() {
   } = useDeepgram({ socket, roomId });
 
   // 1. Permanent Transcription Lifecycle
-  // This effect ensures transcription starts as soon as we have a track
-  // and automatically 're-plugs' if Agora replaces the track.
+  // This effect manages the absolute clean construction and teardown of the audio pipeline
   useEffect(() => {
     if (inRoom && !isMuted) {
       const stream = getMediaStream();
       if (stream) {
         startTranscription(stream);
       }
+    } else {
+      stopTranscription();
     }
-    // We do NOT stop transcription on mute/unmute anymore to keep the pipeline warm
-  }, [inRoom, isMuted, getMediaStream, startTranscription]);
+  }, [inRoom, isMuted, getMediaStream, startTranscription, stopTranscription]);
+
 
   const handleJoinRoom = useCallback(
     async (newRoomId: string, newUserName: string, token?: string) => {
