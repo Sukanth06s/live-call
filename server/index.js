@@ -291,7 +291,7 @@ io.on("connection", (socket) => {
                   }
                   room.activeSpeakers.delete(userName);
                   speakerTimeouts.delete(timeoutKey);
-                }, 2000);
+                }, 5000);
 
                 speakerTimeouts.set(timeoutKey, timer);
               }
