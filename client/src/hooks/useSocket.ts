@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { RoomUser, TranscriptEntry } from "@/types";
+import { RoomUser, TranscriptBlock } from "@/types";
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
 
@@ -10,7 +10,7 @@ export function useSocket() {
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [users, setUsers] = useState<RoomUser[]>([]);
-  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
+  const [blocks, setBlocks] = useState<TranscriptBlock[]>([]);
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -40,55 +40,31 @@ export function useSocket() {
     socket.on("room-state", (state) => {
       console.log("[Socket] Received room-state:", state);
       setUsers(state.users);
-      setTranscripts(state.transcripts || []);
+      setBlocks(state.blocks || []);
     });
 
-    // We keep these for real-time speaking indicators only if needed, 
-    // but room-state will handle the rest.
+    // Legacy speaking indicators - room-state or block-update will handle visual speaking states
     socket.on("user-speaking", ({ userId, isSpeaking }: { userId: string; isSpeaking: boolean }) => {
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? { ...u, isSpeaking } : u))
       );
     });
 
-    socket.on("transcript-update", (entry: TranscriptEntry) => {
-      // 1. Update transcripts state
-      setTranscripts((prev) => {
-        if (entry.isFinal) {
-          const isDuplicate = prev.some(
-            (t) => t.isFinal && t.text === entry.text && Math.abs(t.timestamp - entry.timestamp) < 2000
-          );
-          if (isDuplicate) return prev;
-        }
-
-        if (!entry.isFinal) {
-          const existingIdx = prev.findIndex(
-            (t) => t.userId === entry.userId && !t.isFinal
-          );
-          if (existingIdx >= 0) {
-            const next = [...prev];
-            next[existingIdx] = entry;
-            return next;
+    // Highly efficient targeted speaker block aggregation update with version ordering safety
+    socket.on("block-update", (updatedBlock: TranscriptBlock) => {
+      setBlocks((prev) => {
+        const idx = prev.findIndex((b) => b.id === updatedBlock.id);
+        if (idx >= 0) {
+          // Version check: Ignore stale or duplicate updates
+          if (updatedBlock.version <= prev[idx].version) {
+            return prev;
           }
-          return [...prev, entry];
+          const next = [...prev];
+          next[idx] = updatedBlock;
+          return next;
         }
-        const filtered = prev.filter(
-          (t) => !(t.userId === entry.userId && !t.isFinal)
-        );
-        return [...filtered, entry];
+        return [...prev, updatedBlock];
       });
-
-      // 2. Set temporary speaking indicator
-      setUsers((prev) =>
-        prev.map((u) => (u.id === entry.userId ? { ...u, isSpeaking: true } : u))
-      );
-      
-      // Auto-reset speaking indicator after 1.5s
-      setTimeout(() => {
-        setUsers((prev) =>
-          prev.map((u) => (u.id === entry.userId ? { ...u, isSpeaking: false } : u))
-        );
-      }, 1500);
     });
 
     return () => {
@@ -108,19 +84,14 @@ export function useSocket() {
       socketRef.current.emit("leave-room");
       setCurrentRoomId(null);
       setUsers([]);
-      setTranscripts([]);
-    }
-  }, []);
-
-  const emitTranscript = useCallback((roomId: string, transcript: string, isFinal: boolean) => {
-    if (socketRef.current) {
-      socketRef.current.emit("transcript", { roomId, transcript, isFinal });
+      setBlocks([]);
     }
   }, []);
 
   const emitMuteToggle = useCallback((roomId: string, isMuted: boolean) => {
     if (socketRef.current) {
-      socketRef.current.emit("mute-toggle", { roomId, isMuted });
+      // Align event with server listener "toggle-mute"
+      socketRef.current.emit("toggle-mute", { roomId, isMuted });
     }
   }, []);
 
@@ -130,17 +101,24 @@ export function useSocket() {
     }
   }, []);
 
+  const emitTranscriptEdit = useCallback((roomId: string, blockId: string, content: string) => {
+    if (socketRef.current) {
+      socketRef.current.emit("transcript-edit", { roomId, blockId, content });
+    }
+  }, []);
+
   return {
     socket: socketRef.current,
     socketId: socketRef.current?.id || null,
     isConnected,
     users,
-    transcripts,
+    blocks,
     currentRoomId,
     joinRoom,
     leaveRoom,
-    emitTranscript,
     emitMuteToggle,
     emitSpeaking,
+    emitTranscriptEdit,
   };
 }
+

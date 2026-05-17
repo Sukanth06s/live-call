@@ -22,12 +22,12 @@ export default function Home() {
     socketId,
     isConnected,
     users,
-    transcripts,
+    blocks,
     joinRoom,
     leaveRoom: socketLeaveRoom,
-    emitTranscript,
     emitMuteToggle,
-    socket, // We need the raw socket now
+    emitTranscriptEdit,
+    socket,
   } = useSocket();
 
   const {
@@ -114,6 +114,10 @@ export default function Home() {
     // Transcription lifecycle is now handled automatically by the useEffect
   }, [agoraToggleMute, emitMuteToggle, roomId]);
 
+  const handleEditBlock = useCallback((blockId: string, content: string) => {
+    emitTranscriptEdit(roomId, blockId, content);
+  }, [emitTranscriptEdit, roomId]);
+
   // Loading state
   if (status === "loading") {
     return (
@@ -159,7 +163,7 @@ export default function Home() {
            >
              Sign Out
            </button>
-        </div>
+         </div>
         <Lobby onJoinRoom={handleJoinRoom} isConnected={isConnected} defaultName={session.user?.name || ""} />
       </>
     );
@@ -170,7 +174,7 @@ export default function Home() {
       roomId={roomId}
       userName={userName}
       users={users}
-      transcripts={transcripts}
+      blocks={blocks}
       currentUserId={socketId}
       isMuted={isMuted}
       isConnected={isConnected}
@@ -178,6 +182,7 @@ export default function Home() {
       isTranscribing={isTranscribing}
       onToggleMute={handleToggleMute}
       onLeaveRoom={handleLeaveRoom}
+      onEditBlock={handleEditBlock}
     />
   );
 }

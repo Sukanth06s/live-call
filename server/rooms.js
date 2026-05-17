@@ -7,7 +7,8 @@ function createRoom(roomId) {
     rooms.set(roomId, {
       id: roomId,
       users: new Map(),
-      transcripts: [],
+      blocks: [],                 // Array of TranscriptBlocks
+      activeSpeakers: new Map(),  // userName -> { blockId, committedSegments, liveSegment }
       createdAt: Date.now(),
     });
   }
@@ -49,10 +50,10 @@ function getRoomUsers(roomId) {
   return Array.from(room.users.values());
 }
 
-function getRoomTranscripts(roomId) {
+function getRoomBlocks(roomId) {
   const room = rooms.get(roomId);
   if (!room) return [];
-  return room.transcripts || [];
+  return room.blocks || [];
 }
 
 function toggleMute(roomId, userId, isMuted) {
@@ -73,17 +74,64 @@ function setSpeaking(roomId, userId, isSpeaking) {
   return false;
 }
 
-function addTranscript(roomId, transcript) {
+function addBlock(roomId, block) {
   const room = rooms.get(roomId);
   if (room) {
-    room.transcripts.push(transcript);
-    // Keep last 500 transcripts per room
-    if (room.transcripts.length > 500) {
-      room.transcripts = room.transcripts.slice(-500);
+    room.blocks.push(block);
+    // Keep last 500 blocks per room to prevent memory overflow
+    if (room.blocks.length > 500) {
+      room.blocks = room.blocks.slice(-500);
     }
     return true;
   }
   return false;
+}
+
+function updateBlockContent(roomId, blockId, content) {
+  const room = rooms.get(roomId);
+  if (room) {
+    const block = room.blocks.find(b => b.id === blockId);
+    if (block) {
+      block.content = content;
+      block.updatedAt = Date.now();
+      block.version += 1;
+      // Overwrite segment list with a single finalized edit segment
+      block.segments = [{
+        text: content,
+        isFinal: true,
+        timestamp: Date.now(),
+        confidence: 1.0
+      }];
+      return block;
+    }
+  }
+  return null;
+}
+
+function findActiveSpeakerBlock(roomId, userName) {
+  const room = rooms.get(roomId);
+  if (room && room.activeSpeakers.has(userName)) {
+    const buffer = room.activeSpeakers.get(userName);
+    return room.blocks.find(b => b.id === buffer.blockId) || null;
+  }
+  return null;
+}
+
+function finalizeAllActiveSpeakers(roomId) {
+  const room = rooms.get(roomId);
+  if (room) {
+    for (const [userName, buffer] of room.activeSpeakers) {
+      const block = room.blocks.find(b => b.id === buffer.blockId);
+      if (block) {
+        block.status = "final";
+        block.isLive = false;
+        block.isFinal = true;
+        block.version += 1;
+        block.updatedAt = Date.now();
+      }
+      room.activeSpeakers.delete(userName);
+    }
+  }
 }
 
 function findUserRoom(userId) {
@@ -101,9 +149,13 @@ module.exports = {
   leaveRoom,
   getRoom,
   getRoomUsers,
-  getRoomTranscripts,
+  getRoomBlocks,
   toggleMute,
   setSpeaking,
-  addTranscript,
+  addBlock,
+  updateBlockContent,
+  findActiveSpeakerBlock,
+  finalizeAllActiveSpeakers,
   findUserRoom,
 };
+

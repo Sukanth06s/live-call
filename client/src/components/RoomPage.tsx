@@ -6,13 +6,13 @@ import UserList from "./UserList";
 import TranscriptPanel from "./TranscriptPanel";
 import MuteButton from "./MuteButton";
 import ConnectionStatus from "./ConnectionStatus";
-import { RoomUser, TranscriptEntry } from "@/types";
+import { RoomUser, TranscriptBlock } from "@/types";
 
 interface RoomPageProps {
   roomId: string;
   userName: string;
   users: RoomUser[];
-  transcripts: TranscriptEntry[];
+  blocks: TranscriptBlock[];
   currentUserId: string | null;
   isMuted: boolean;
   isConnected: boolean;
@@ -20,13 +20,14 @@ interface RoomPageProps {
   isTranscribing: boolean;
   onToggleMute: () => void;
   onLeaveRoom: () => void;
+  onEditBlock: (blockId: string, content: string) => void;
 }
 
 export default function RoomPage({
   roomId,
   userName,
   users,
-  transcripts,
+  blocks,
   currentUserId,
   isMuted,
   isConnected,
@@ -34,6 +35,7 @@ export default function RoomPage({
   isTranscribing,
   onToggleMute,
   onLeaveRoom,
+  onEditBlock,
 }: RoomPageProps) {
   const copyRoomId = useCallback(() => {
     navigator.clipboard.writeText(roomId);
@@ -62,7 +64,7 @@ export default function RoomPage({
             </div>
             <div>
               <h1 className="text-base font-bold text-white">LiveRoom</h1>
-              <p className="text-[11px] text-gray-500">Voice + AI Transcription</p>
+              <p className="text-[11px] text-gray-500">Speaker Conversational Workspace</p>
             </div>
           </div>
 
@@ -113,8 +115,14 @@ export default function RoomPage({
         transition={{ delay: 0.15 }}
         className="flex-1 flex flex-col min-w-0 h-full overflow-hidden"
       >
-        <TranscriptPanel transcripts={transcripts} currentUserId={currentUserId} />
+        <TranscriptPanel
+          blocks={blocks}
+          currentUserName={userName}
+          roomId={roomId}
+          onEditBlock={onEditBlock}
+        />
       </motion.main>
     </div>
   );
 }
+
