@@ -56,6 +56,7 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
       }
       
       const audioContext = audioCtxRef.current;
+      console.log(`[Deepgram Proxy] AudioContext initialized at sampleRate: ${audioContext.sampleRate}Hz`);
 
       // MOBILE FIX: Automatically resume AudioContext if suspended by the browser
       if (audioContext.state === "suspended") {
@@ -69,10 +70,10 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
         stopTranscription();
       }
 
-      // 4. Ensure AudioWorklet module is loaded (only once per context)
+      // 4. Ensure AudioWorklet module is loaded (only once per context with cache-busting)
       if (!workletLoadedRef.current) {
         console.log("[Deepgram Proxy] Loading AudioWorklet module...");
-        await audioContext.audioWorklet.addModule("/audio-processor.js");
+        await audioContext.audioWorklet.addModule(`/audio-processor.js?v=${Date.now()}`);
         workletLoadedRef.current = true;
         console.log("[Deepgram Proxy] AudioWorklet module loaded successfully.");
       }
@@ -96,7 +97,11 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
         }
 
         if (socket && socket.connected) {
-          socket.emit("audio-chunk", { roomId, audio: pcmBuffer });
+          socket.emit("audio-chunk", { 
+            roomId, 
+            audio: pcmBuffer,
+            sampleRate: audioContext.sampleRate
+          });
         }
       };
 

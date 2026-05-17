@@ -147,7 +147,7 @@ io.on("connection", (socket) => {
   });
 
   // SECURE DEEPGRAM PROXY & TURN ENGINE
-  socket.on("audio-chunk", ({ roomId, audio }) => {
+  socket.on("audio-chunk", ({ roomId, audio, sampleRate }) => {
     const activeRoomId = roomId || socket.data.roomId;
     const userName = socket.data.userName || "Guest";
     const speakerId = socket.id;
@@ -155,13 +155,14 @@ io.on("connection", (socket) => {
     if (!dgConnection && !isDeepgramConnecting) {
       isDeepgramConnecting = true;
       audioQueue = []; // Reset queue for new session
-      console.log(`[Deepgram] Starting session for: ${userName}`);
+      const streamSampleRate = sampleRate || 16000;
+      console.log(`[Deepgram] Starting session for: ${userName} at sampleRate: ${streamSampleRate}Hz`);
       
       const options = {
         model: "nova-2",
         smart_format: true,
         encoding: "linear16",
-        sample_rate: 16000,
+        sample_rate: streamSampleRate,
       };
 
       try {
