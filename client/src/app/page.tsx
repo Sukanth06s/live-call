@@ -72,7 +72,10 @@ export default function Home() {
         let agoraToken = token;
         if (!agoraToken) {
           try {
-            const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
+            let socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
+            if (socketUrl && !socketUrl.startsWith("http://") && !socketUrl.startsWith("https://")) {
+              socketUrl = `https://${socketUrl}`;
+            }
             const res = await fetch(`${socketUrl}/api/token?channelName=${newRoomId}`);
             const data = await res.json();
             agoraToken = data.token;
