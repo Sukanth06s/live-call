@@ -17,6 +17,7 @@ export default function Home() {
   const [inRoom, setInRoom] = useState(false);
   const [roomId, setRoomId] = useState("");
   const [userName, setUserName] = useState("");
+  const [joinError, setJoinError] = useState<string | null>(null);
 
   const {
     socketId,
@@ -76,6 +77,7 @@ export default function Home() {
   const handleJoinRoom = useCallback(
     async (newRoomId: string, newUserName: string, token?: string) => {
       try {
+        setJoinError(null);
         setRoomId(newRoomId);
         setUserName(newUserName);
         roomIdRef.current = newRoomId;
@@ -100,8 +102,9 @@ export default function Home() {
         // Just join Agora. The useEffect above will handle starting Deepgram.
         await joinChannel(newRoomId, agoraToken);
         setInRoom(true);
-      } catch (err) {
+      } catch (err: any) {
         console.error("Failed to join room:", err);
+        setJoinError(err.message || String(err));
         socketLeaveRoom();
         await leaveChannel();
         stopTranscription();
@@ -189,7 +192,13 @@ export default function Home() {
              Sign Out
            </button>
          </div>
-        <Lobby onJoinRoom={handleJoinRoom} isConnected={isConnected} defaultName={session.user?.name || ""} />
+        <Lobby 
+          onJoinRoom={handleJoinRoom} 
+          isConnected={isConnected} 
+          defaultName={session.user?.name || ""} 
+          joinError={joinError}
+          onClearError={() => setJoinError(null)}
+        />
       </>
     );
   }

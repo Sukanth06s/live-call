@@ -7,9 +7,17 @@ interface LobbyProps {
   onJoinRoom: (roomId: string, userName: string, token?: string) => void;
   isConnected: boolean;
   defaultName?: string;
+  joinError?: string | null;
+  onClearError?: () => void;
 }
 
-export default function Lobby({ onJoinRoom, isConnected, defaultName }: LobbyProps) {
+export default function Lobby({ 
+  onJoinRoom, 
+  isConnected, 
+  defaultName,
+  joinError,
+  onClearError
+}: LobbyProps) {
   const [roomId, setRoomId] = useState("");
   const [userName, setUserName] = useState(defaultName || "");
   const [token, setToken] = useState("");
@@ -78,6 +86,44 @@ export default function Lobby({ onJoinRoom, isConnected, defaultName }: LobbyPro
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
+            {joinError && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="p-4 rounded-2xl bg-red-500/10 border border-red-500/20 backdrop-blur-md text-red-200 text-xs space-y-2 relative"
+              >
+                <div className="flex justify-between items-start">
+                  <div className="font-semibold text-red-400 flex items-center gap-1.5 uppercase tracking-wider">
+                    <svg className="w-4 h-4 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    Failed to Join Room
+                  </div>
+                  {onClearError && (
+                    <button
+                      type="button"
+                      onClick={onClearError}
+                      className="text-red-400 hover:text-red-300 transition-colors p-1"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+                <p className="leading-relaxed">
+                  {joinError.includes("PERMISSION_DENIED") || joinError.toLowerCase().includes("permission")
+                    ? "Microphone access denied. Please click the microphone icon in your browser URL bar, grant permission, and try again."
+                    : joinError.includes("navigator.mediaDevices") || joinError.includes("undefined")
+                    ? "Microphone API not supported on this context. Please ensure you are connected via secure HTTPS (required by browsers for mic permissions)."
+                    : joinError}
+                </p>
+                <div className="text-[10px] text-red-400/80 pt-1 border-t border-red-500/10">
+                  Troubleshoot: Ensure you have a working mic plugged in and that this site is not blocked from capturing audio.
+                </div>
+              </motion.div>
+            )}
+
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-2 uppercase tracking-wider">
                 Your Name
