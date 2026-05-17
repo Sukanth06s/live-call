@@ -27,7 +27,7 @@ const {
 } = require("./rooms");
 
 const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
-const { createClient } = require("@deepgram/sdk");
+const { createClient, LiveTranscriptionEvents } = require("@deepgram/sdk");
 const jwt = require("jsonwebtoken");
 const cookie = require("cookie");
 
@@ -128,6 +128,7 @@ io.on("connection", (socket) => {
 
   let dgConnection = null;
   let isDeepgramConnecting = false;
+  let isDgOpen = false;
   let audioQueue = [];
 
   // Join Room
@@ -173,8 +174,8 @@ io.on("connection", (socket) => {
         // Standard v3 pattern
         dgConnection = deepgram.listen.live(options);
         
-        dgConnection.on("Results", (data) => {
-          console.log("[DEEPGRAM EVENT - RESULTS]", JSON.stringify(data.channel.alternatives[0]));
+        dgConnection.on(LiveTranscriptionEvents.Transcript, (data) => {
+          console.log("[DEEPGRAM EVENT - RESULTS]", data.channel ? JSON.stringify(data.channel.alternatives[0]) : "no alternatives data");
           const transcript = data.channel.alternatives[0].transcript;
           const confidence = data.channel.alternatives[0].confidence || 1.0;
           
@@ -298,27 +299,37 @@ io.on("connection", (socket) => {
           }
         });
 
-        dgConnection.on("Open", () => {
-          console.log("[DEEPGRAM EVENT - OPEN]. Flushing queue:", audioQueue.length);
+        dgConnection.on(LiveTranscriptionEvents.Open, () => {
+          console.log("[DEEPGRAM EVENT - OPEN]. [DG OPEN]. Flushing queue:", audioQueue.length);
           isDeepgramConnecting = false;
+          isDgOpen = true;
+          
+          console.log("[QUEUE FLUSH START]", audioQueue.length);
           // Flush any queued audio
           while (audioQueue.length > 0) {
             const chunk = audioQueue.shift();
-            console.log("[PCM TO DG - FLUSH]", chunk.byteLength);
-            dgConnection.send(chunk);
+            console.log("[PCM TO DG]", chunk.byteLength);
+            try {
+              dgConnection.send(chunk);
+            } catch (sendErr) {
+              console.error("[DEEPGRAM SEND ERROR - FLUSH]:", sendErr);
+            }
           }
+          console.log("[QUEUE FLUSH END]");
         });
 
-        dgConnection.on("Close", () => {
-          console.log("[DEEPGRAM EVENT - CLOSE]");
+        dgConnection.on(LiveTranscriptionEvents.Close, (e) => {
+          console.log("[DEEPGRAM EVENT - CLOSE]. [DG CLOSE]", e);
           dgConnection = null;
           isDeepgramConnecting = false;
+          isDgOpen = false;
         });
 
-        dgConnection.on("Error", (err) => {
-          console.error("[DEEPGRAM EVENT - ERROR]:", err);
+        dgConnection.on(LiveTranscriptionEvents.Error, (err) => {
+          console.error("[DEEPGRAM EVENT - ERROR]. [DG ERROR]:", err);
           dgConnection = null;
           isDeepgramConnecting = false;
+          isDgOpen = false;
           audioQueue = [];
         });
 
@@ -326,15 +337,26 @@ io.on("connection", (socket) => {
         console.error("[Deepgram] Crash caught:", err.message);
         dgConnection = null;
         isDeepgramConnecting = false;
+        isDgOpen = false;
         audioQueue = [];
       }
     }
 
     // Process chunk
-    if (dgConnection && dgConnection.getReadyState && dgConnection.getReadyState() === 1) {
+    const isReady = isDgOpen || (dgConnection && dgConnection.socket && dgConnection.socket.readyState === 1);
+    
+    if (dgConnection && isReady) {
       console.log("[PCM TO DG]", audio.byteLength);
-      dgConnection.send(audio);
+      try {
+        dgConnection.send(audio);
+      } catch (sendErr) {
+        console.error("[DEEPGRAM SEND ERROR]:", sendErr);
+      }
     } else if (isDeepgramConnecting) {
+      const readyStateVal = dgConnection 
+        ? (dgConnection.getReadyState ? dgConnection.getReadyState() : (dgConnection.socket ? dgConnection.socket.readyState : "no socket"))
+        : "null";
+      console.log("[DG READY STATE]", readyStateVal);
       console.log("[PCM QUEUED]", audio.byteLength);
       audioQueue.push(audio);
       if (audioQueue.length > 100) audioQueue.shift(); // Safety limit (approx 4-5 seconds)
