@@ -48,9 +48,10 @@ export default function Home() {
   } = useDeepgram({ socket, roomId });
 
   // 1. Permanent Transcription Lifecycle
-  // This effect manages the absolute clean construction and teardown of the audio pipeline
+  // This effect manages the absolute clean construction and teardown of the audio pipeline.
+  // It is completely decoupled from mute states to ensure the AudioWorklet graph stays warm and active.
   useEffect(() => {
-    if (inRoom && !isMuted) {
+    if (inRoom) {
       const stream = getMediaStream();
       if (stream) {
         startTranscription(stream);
@@ -58,7 +59,7 @@ export default function Home() {
     } else {
       stopTranscription();
     }
-  }, [inRoom, isMuted, getMediaStream, startTranscription, stopTranscription]);
+  }, [inRoom, getMediaStream, startTranscription, stopTranscription]);
 
 
   const handleJoinRoom = useCallback(
