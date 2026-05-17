@@ -9,8 +9,9 @@ interface UseDeepgramOptions {
 
 export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const workletLoadedRef = useRef<boolean>(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
 
   const stopTranscription = useCallback(() => {
@@ -23,15 +24,15 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
       }
       sourceRef.current = null;
     }
-    if (processorRef.current) {
-      console.log("[Deepgram Proxy] Tearing down Processor Node");
+    if (workletNodeRef.current) {
+      console.log("[Deepgram Proxy] Tearing down AudioWorklet Node");
       try {
-        processorRef.current.disconnect();
-        processorRef.current.onaudioprocess = null;
+        workletNodeRef.current.disconnect();
+        workletNodeRef.current.port.onmessage = null;
       } catch (e) {
-        console.warn("[Deepgram Proxy] Processor disconnect warning:", e);
+        console.warn("[Deepgram Proxy] AudioWorklet disconnect warning:", e);
       }
-      processorRef.current = null;
+      workletNodeRef.current = null;
     }
     setIsTranscribing(false);
     console.log("[Deepgram Proxy] Transcription pipeline successfully dismantled.");
@@ -45,6 +46,8 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
         console.warn("[Deepgram Proxy] Mic stream or track is inactive/ended. Skipping pipeline build.");
         return;
       }
+
+      console.log(`[Deepgram Proxy] Starting pipeline. Track state - readyState: ${track.readyState}, enabled: ${track.enabled}, stream active: ${externalStream.active}`);
 
       // 2. Initialize the persistent AudioContext once
       if (!audioCtxRef.current) {
@@ -61,42 +64,47 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
       }
 
       // 3. Dismantle any old, stale connection graph to prevent memory leaks or frozen nodes
-      if (sourceRef.current || processorRef.current) {
+      if (sourceRef.current || workletNodeRef.current) {
         console.log("[Deepgram Proxy] Stale audio pipeline detected. Dismantling before rebuild...");
         stopTranscription();
       }
 
-      // 4. FULL REBUILD: Create brand new nodes to restart browser's audio processing thread
+      // 4. Ensure AudioWorklet module is loaded (only once per context)
+      if (!workletLoadedRef.current) {
+        console.log("[Deepgram Proxy] Loading AudioWorklet module...");
+        await audioContext.audioWorklet.addModule("/audio-processor.js");
+        workletLoadedRef.current = true;
+        console.log("[Deepgram Proxy] AudioWorklet module loaded successfully.");
+      }
+
+      // 5. FULL REBUILD: Create brand new AudioWorkletNode and MediaStreamAudioSourceNode
       console.log("[Deepgram Proxy] Rebuilding entire Audio Pipeline from scratch...");
       
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      processor.onaudioprocess = (e) => {
+      const workletNode = new AudioWorkletNode(audioContext, "audio-processor");
+      
+      // Listen to the worklet's port for Int16 buffer messages
+      workletNode.port.onmessage = (event) => {
+        const pcmBuffer = event.data; // ArrayBuffer containing Int16 PCM data
         if (socket && socket.connected) {
-          const inputData = e.inputBuffer.getChannelData(0);
-          const int16Data = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            const s = Math.max(-1, Math.min(1, inputData[i]));
-            int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-          }
-          socket.emit("audio-chunk", { roomId, audio: int16Data.buffer });
+          socket.emit("audio-chunk", { roomId, audio: pcmBuffer });
         }
       };
 
       const source = audioContext.createMediaStreamSource(externalStream);
 
-      // Wire new absolute graph
-      source.connect(processor);
-      processor.connect(audioContext.destination);
+      // Wire new absolute thread-isolated graph
+      source.connect(workletNode);
+      workletNode.connect(audioContext.destination);
 
       // Store references
       sourceRef.current = source;
-      processorRef.current = processor;
+      workletNodeRef.current = workletNode;
 
       setIsTranscribing(true);
-      console.log("[Deepgram Proxy] Web Audio graph built and processing frames!");
+      console.log("[Deepgram Proxy] AudioWorklet graph active and processing audio frames in background!");
 
     } catch (err) {
-      console.error("[Deepgram Proxy] Failed to start/rebuild transcription graph:", err);
+      console.error("[Deepgram Proxy] Failed to start/rebuild AudioWorklet graph:", err);
     }
   }, [socket, roomId, stopTranscription]);
 
@@ -106,4 +114,5 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
     isTranscribing,
   };
 }
+
 
