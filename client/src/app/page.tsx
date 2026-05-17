@@ -34,6 +34,7 @@ export default function Home() {
     joinChannel,
     leaveChannel,
     toggleMute: agoraToggleMute,
+    getLocalTrack,
     getMediaStream,
     isMuted,
     isJoined: isAgoraJoined,
@@ -54,12 +55,22 @@ export default function Home() {
     if (inRoom) {
       const stream = getMediaStream();
       if (stream) {
+        // Log Track State on Warm Startup
+        const localAudioTrack = getLocalTrack();
+        const mediaTrack = localAudioTrack?.getMediaStreamTrack();
+        console.log("[TRACK STATE - LIFECYCLE START]", {
+          id: mediaTrack?.id,
+          readyState: mediaTrack?.readyState,
+          muted: mediaTrack?.muted,
+          enabled: mediaTrack?.enabled
+        });
+
         startTranscription(stream);
       }
     } else {
       stopTranscription();
     }
-  }, [inRoom, getMediaStream, startTranscription, stopTranscription]);
+  }, [inRoom, getMediaStream, startTranscription, stopTranscription, getLocalTrack]);
 
 
   const handleJoinRoom = useCallback(
@@ -116,8 +127,17 @@ export default function Home() {
   const handleToggleMute = useCallback(async () => {
     const newMuted = await agoraToggleMute();
     emitMuteToggle(roomId, newMuted);
-    // Transcription lifecycle is now handled automatically by the useEffect
-  }, [agoraToggleMute, emitMuteToggle, roomId]);
+    
+    // Log Track State on Mute/Unmute toggle
+    const localAudioTrack = getLocalTrack();
+    const mediaTrack = localAudioTrack?.getMediaStreamTrack();
+    console.log("[TRACK STATE - MUTE TOGGLE]", {
+      id: mediaTrack?.id,
+      readyState: mediaTrack?.readyState,
+      muted: mediaTrack?.muted,
+      enabled: mediaTrack?.enabled
+    });
+  }, [agoraToggleMute, emitMuteToggle, roomId, getLocalTrack]);
 
   const handleEditBlock = useCallback((blockId: string, content: string) => {
     emitTranscriptEdit(roomId, blockId, content);

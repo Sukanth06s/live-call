@@ -148,6 +148,10 @@ io.on("connection", (socket) => {
 
   // SECURE DEEPGRAM PROXY & TURN ENGINE
   socket.on("audio-chunk", ({ roomId, audio, sampleRate }) => {
+    if (audio) {
+      console.log("[PCM RECEIVED]", audio.byteLength);
+    }
+
     const activeRoomId = roomId || socket.data.roomId;
     const userName = socket.data.userName || "Guest";
     const speakerId = socket.id;
@@ -170,6 +174,7 @@ io.on("connection", (socket) => {
         dgConnection = deepgram.listen.live(options);
         
         dgConnection.on("Results", (data) => {
+          console.log("[DEEPGRAM EVENT - RESULTS]", JSON.stringify(data.channel.alternatives[0]));
           const transcript = data.channel.alternatives[0].transcript;
           const confidence = data.channel.alternatives[0].confidence || 1.0;
           
@@ -294,23 +299,24 @@ io.on("connection", (socket) => {
         });
 
         dgConnection.on("Open", () => {
-          console.log("[Deepgram] Connection READY. Flushing queue:", audioQueue.length);
+          console.log("[DEEPGRAM EVENT - OPEN]. Flushing queue:", audioQueue.length);
           isDeepgramConnecting = false;
           // Flush any queued audio
           while (audioQueue.length > 0) {
             const chunk = audioQueue.shift();
+            console.log("[PCM TO DG - FLUSH]", chunk.byteLength);
             dgConnection.send(chunk);
           }
         });
 
         dgConnection.on("Close", () => {
-          console.log("[Deepgram] Connection closed");
+          console.log("[DEEPGRAM EVENT - CLOSE]");
           dgConnection = null;
           isDeepgramConnecting = false;
         });
 
         dgConnection.on("Error", (err) => {
-          console.error("[Deepgram] SDK ERROR:", err);
+          console.error("[DEEPGRAM EVENT - ERROR]:", err);
           dgConnection = null;
           isDeepgramConnecting = false;
           audioQueue = [];
@@ -326,8 +332,10 @@ io.on("connection", (socket) => {
 
     // Process chunk
     if (dgConnection && dgConnection.getReadyState && dgConnection.getReadyState() === 1) {
+      console.log("[PCM TO DG]", audio.byteLength);
       dgConnection.send(audio);
     } else if (isDeepgramConnecting) {
+      console.log("[PCM QUEUED]", audio.byteLength);
       audioQueue.push(audio);
       if (audioQueue.length > 100) audioQueue.shift(); // Safety limit (approx 4-5 seconds)
     }

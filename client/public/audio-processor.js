@@ -2,7 +2,6 @@ class AudioProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     // Buffer size of 4096 samples (approx 256ms of audio at 16kHz sample rate)
-    // This reduces WebSocket emission frequency from 125Hz to 4Hz (a 97% network overhead reduction!)
     this.bufferSize = 4096;
     this.buffer = new Int16Array(this.bufferSize);
     this.bufferIndex = 0;
@@ -14,8 +13,21 @@ class AudioProcessor extends AudioWorkletProcessor {
       const channelData = input[0]; // Mono microphone track
 
       if (channelData && channelData.length > 0) {
+        // 1. Calculate the raw average amplitude (volume) of the audio frame
+        let sum = 0;
         for (let i = 0; i < channelData.length; i++) {
-          // Convert Float32 sample [-1.0, 1.0] to Int16 PCM sample [-32768, 32767]
+          sum += Math.abs(channelData[i]);
+        }
+        const avg = sum / channelData.length;
+
+        // Post the volume levels to the main thread
+        this.port.postMessage({
+          type: "volume",
+          avg: avg
+        });
+
+        // 2. Accumulate PCM Float32 to Int16
+        for (let i = 0; i < channelData.length; i++) {
           const s = Math.max(-1, Math.min(1, channelData[i]));
           const int16Val = s < 0 ? s * 0x8000 : s * 0x7fff;
           
@@ -23,13 +35,15 @@ class AudioProcessor extends AudioWorkletProcessor {
 
           // When the buffer is full, emit the accumulated PCM block
           if (this.bufferIndex >= this.bufferSize) {
-            // Slice the underlying ArrayBuffer to create a copy, leaving the worklet's array active
             const rawBuffer = this.buffer.buffer.slice(0);
             
-            // Post the buffer to the main thread using high-performance zero-copy transfer list
-            this.port.postMessage(rawBuffer, [rawBuffer]);
+            // Post the audio buffer using zero-copy transfer list
+            this.port.postMessage({
+              type: "audio",
+              buffer: rawBuffer
+            }, [rawBuffer]);
             
-            // Reset index for the next block
+            // Reset index
             this.bufferIndex = 0;
           }
         }

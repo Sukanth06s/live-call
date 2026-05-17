@@ -85,23 +85,37 @@ export function useDeepgram({ socket, roomId }: UseDeepgramOptions) {
       let lastHeartbeat = Date.now();
       let chunkCount = 0;
 
-      // Listen to the worklet's port for Int16 buffer messages
+      let lastVolumeLog = Date.now();
+
+      // Listen to the worklet's port for messages
       workletNode.port.onmessage = (event) => {
-        const pcmBuffer = event.data; // ArrayBuffer containing Int16 PCM data
-        chunkCount++;
+        const message = event.data;
 
-        const now = Date.now();
-        if (now - lastHeartbeat > 5000) {
-          console.log(`[Deepgram Proxy] AudioWorklet Heartbeat: Active, processed ${chunkCount} chunks, last buffer size: ${pcmBuffer.byteLength} bytes.`);
-          lastHeartbeat = now;
-        }
+        if (message.type === "volume") {
+          const now = Date.now();
+          // Throttle volume logging to once per second to prevent mobile browser freezing
+          if (now - lastVolumeLog > 1000) {
+            console.log("[WORKLET VOLUME]", message.avg);
+            lastVolumeLog = now;
+          }
+        } else if (message.type === "audio") {
+          const pcmBuffer = message.buffer; // ArrayBuffer containing Int16 PCM data
+          chunkCount++;
 
-        if (socket && socket.connected) {
-          socket.emit("audio-chunk", { 
-            roomId, 
-            audio: pcmBuffer,
-            sampleRate: audioContext.sampleRate
-          });
+          const now = Date.now();
+          if (now - lastHeartbeat > 5000) {
+            console.log(`[Deepgram Proxy] AudioWorklet Heartbeat: Active, processed ${chunkCount} chunks, last buffer size: ${pcmBuffer.byteLength} bytes.`);
+            lastHeartbeat = now;
+          }
+
+          if (socket && socket.connected) {
+            console.log("[PCM SENT]", pcmBuffer.byteLength);
+            socket.emit("audio-chunk", { 
+              roomId, 
+              audio: pcmBuffer,
+              sampleRate: audioContext.sampleRate
+            });
+          }
         }
       };
 
