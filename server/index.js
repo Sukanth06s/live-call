@@ -1,21 +1,28 @@
 require("dotenv").config();
-// Global error catcher to debug Railway crashes
+
 process.on("uncaughtException", (err) => {
   console.error("[CRITICAL] Uncaught Exception:", err);
 });
 process.on("unhandledRejection", (reason, promise) => {
-  console.error("[CRITICAL] Unhandled Rejection at:", promise, "reason:", reason);
+  console.error("[CRITICAL] Unhandled Rejection:", reason);
 });
 
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
+const jwt = require("jsonwebtoken");
+const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
+const { createClient: createDeepgramClient, LiveTranscriptionEvents } = require("@deepgram/sdk");
+
+const supabaseAdmin = require("./supabase");
 const {
+  createRoom,
   joinRoom,
   leaveRoom,
-  getRoomUsers,
-  getRoomBlocks,
+  getRoom,
+  getProjectedRoomState,
+  getRoomSocketsByRole,
   toggleMute,
   setSpeaking,
   addBlock,
@@ -23,22 +30,13 @@ const {
   findActiveSpeakerBlock,
   finalizeAllActiveSpeakers,
   findUserRoom,
-  getRoom,
+  deleteRoom,
 } = require("./rooms");
-
-const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
-const { createClient, LiveTranscriptionEvents } = require("@deepgram/sdk");
-const jwt = require("jsonwebtoken");
-const cookie = require("cookie");
 
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Deepgram using the standard v3 factory
-const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
-console.log("DG CLIENT INITIALIZED");
-console.log("DG KEYS:", Object.keys(deepgram));
-console.log("DG LISTEN: found");
+const deepgram = createDeepgramClient(process.env.DEEPGRAM_API_KEY);
 
 const io = new Server(server, {
   cors: {
@@ -54,445 +52,508 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Global Silence Timeout Registry
-const speakerTimeouts = new Map(); // key: `${roomId}-${userName}` -> Timeout
+const speakerTimeouts = new Map();
+const activeDeepgramConnections = new Map(); // roomId -> { dgConnection, isDeepgramConnecting, isDgOpen, audioQueue }
 
-// Helper to broadcast full canonical room state
-const broadcastRoomState = (roomId) => {
+// Helper to broadcast projected room state based on roles
+const broadcastProjectedRoomState = (roomId) => {
   if (!roomId) return;
-  const state = {
-    users: getRoomUsers(roomId),
-    blocks: getRoomBlocks(roomId) || [],
-  };
-  console.log(`[Room] Broadcasting state for ${roomId} to ${state.users.length} users`);
-  io.to(roomId).emit("room-state", state);
+  const { regular, superAdmin } = getRoomSocketsByRole(roomId);
+  
+  // Broadcast to Regular users (Candidate, HR) - no hidden observers
+  const regularState = getProjectedRoomState(roomId, "candidate");
+  if (regularState) {
+    regular.forEach(socketId => {
+      io.to(socketId).emit("room-state", regularState);
+    });
+  }
+
+  // Broadcast to Super Admins - sees everyone
+  const adminState = getProjectedRoomState(roomId, "super_admin");
+  if (adminState) {
+    superAdmin.forEach(socketId => {
+      io.to(socketId).emit("room-state", adminState);
+    });
+  }
 };
 
+// Socket Auth Middleware
+io.use(async (socket, next) => {
+  const token = socket.handshake.auth?.token;
+  const intendedRole = socket.handshake.auth?.role || "candidate"; 
 
-// Socket.IO Debug Middleware
-io.use((socket, next) => {
-  const origin = socket.handshake.headers.origin;
-  console.log(`[Socket] Connection request from: ${origin}`);
-  socket.data.authenticated = true;
-  next();
+  if (!token) {
+    return next(new Error("Authentication error: Token missing"));
+  }
+  
+  try {
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    
+    if (error || !user) {
+      throw error || new Error("Invalid session");
+    }
+
+    socket.data.userId = user.id; 
+    socket.data.email = user.email;
+    socket.data.role = intendedRole; // In a production app, fetch from DB
+    socket.data.authenticated = true;
+    next();
+  } catch (err) {
+    console.error("[Socket] Auth error:", err.message);
+    next(new Error("Authentication error: Invalid token"));
+  }
 });
 
-// Health check
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "Live Room Server Running" });
 });
 
-// Provide Agora App ID and Deepgram key to frontend
-app.get("/api/config", (req, res) => {
-  res.json({
-    agoraAppId: process.env.AGORA_APP_ID,
-    deepgramApiKey: process.env.DEEPGRAM_API_KEY,
-  });
-});
-
-// Generate Agora RTC Token (ONLY available to authorized requests)
 app.get("/api/token", (req, res) => {
   const channelName = req.query.channelName;
-  if (!channelName) {
-    return res.status(400).json({ error: "channelName is required" });
-  }
+  const role = req.query.role; // "broadcaster" or "audience"
+  if (!channelName) return res.status(400).json({ error: "channelName is required" });
 
   const appId = process.env.AGORA_APP_ID;
   const appCertificate = process.env.AGORA_APP_CERTIFICATE;
-
-  if (!appId || !appCertificate) {
-    return res.status(500).json({ error: "Agora keys missing on server" });
-  }
-
-  const uid = 0;
-  const role = RtcRole.PUBLISHER;
-  const expireTime = 3600;
-  const currentTime = Math.floor(Date.now() / 1000);
-  const privilegeExpireTime = currentTime + expireTime;
-
-  const token = RtcTokenBuilder.buildTokenWithUid(
-    appId,
-    appCertificate,
-    channelName,
-    uid,
-    role,
-    privilegeExpireTime
-  );
-
+  
+  const rtcRole = role === "audience" ? RtcRole.SUBSCRIBER : RtcRole.PUBLISHER;
+  const token = RtcTokenBuilder.buildTokenWithUid(appId, appCertificate, channelName, 0, rtcRole, Math.floor(Date.now() / 1000) + 3600);
+  
   return res.json({ token });
 });
 
-// Socket.IO connection handling
+app.get("/api/rooms", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: "No token provided" });
+  const token = authHeader.split(" ")[1];
+  try {
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !user) {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+    const { getAllRooms } = require("./rooms");
+    res.json({ rooms: getAllRooms() });
+  } catch (err) {
+    res.status(401).json({ error: "Invalid token" });
+  }
+});
+
 io.on("connection", (socket) => {
-  console.log(`[Socket] Authorized: ${socket.id}`);
+  console.log(`[Socket] Authorized: ${socket.id} as ${socket.data.role}`);
 
-  let dgConnection = null;
-  let isDeepgramConnecting = false;
-  let isDgOpen = false;
-  let audioQueue = [];
+  socket.on("join-room", ({ roomId, userName, role }) => {
+    const room = getRoom(roomId);
+    if (room) {
+      if (role === "candidate" && room.candidateUser) {
+        socket.emit("join-error", "This room is already full: A Candidate has already joined this session.");
+        return;
+      }
+      if (role === "hr" && room.hrUser) {
+        socket.emit("join-error", "This room is already full: An HR Interviewer has already joined this session.");
+        return;
+      }
+      if (role === "super_admin" && room.hiddenObservers.size > 0) {
+        socket.emit("join-error", "This room is already full: A Super Admin Observer has already joined this session.");
+        return;
+      }
+    }
 
-  // Join Room
-  socket.on("join-room", ({ roomId, userName }) => {
-    console.log(`[Room] ${userName} joining room ${roomId}`);
     socket.data.userName = userName;
     socket.data.roomId = roomId;
+    if (role) {
+      socket.data.role = role;
+    }
     
-    // 1. Update server state
-    joinRoom(roomId, socket.id, userName);
-    
-    // 2. Join socket room
+    joinRoom(roomId, socket.id, userName, socket.data.userId, socket.data.role);
     socket.join(roomId);
     
-    // 3. Broadcast updated state to EVERYONE in the room (low-frequency boundary)
-    broadcastRoomState(roomId);
+    broadcastProjectedRoomState(roomId);
   });
 
-  // SECURE DEEPGRAM PROXY & TURN ENGINE
-  socket.on("audio-chunk", ({ roomId, userName: reqUserName, audio, sampleRate }) => {
-    if (audio) {
-      console.log("[PCM RECEIVED]", audio.byteLength);
+  socket.on("start-transcription", async ({ roomId }) => {
+    if (socket.data.role !== "hr") {
+      console.warn(`[Security] User ${socket.data.email} attempted to start transcription without HR role.`);
+      return;
     }
+    
+    const room = getRoom(roomId);
+    if (!room || room.state === "transcribing") return;
 
-    const activeRoomId = roomId || socket.data.roomId;
-    const userName = reqUserName || socket.data.userName || "Guest";
-    const speakerId = socket.id;
+    room.state = "active";
+    room.activeTranscriptionSession.isActive = false;
+    room.activeTranscriptionSession.startedBy = socket.data.userId;
+    room.activeTranscriptionSession.targetSpeakerId = room.candidateUser?.id;
 
-    if (!dgConnection && !isDeepgramConnecting) {
-      isDeepgramConnecting = true;
-      audioQueue = []; // Reset queue for new session
-      const streamSampleRate = sampleRate || 16000;
-      console.log(`[Deepgram] Starting session for: ${userName} at sampleRate: ${streamSampleRate}Hz`);
+    // Soft Recovery: Immediately insert the interview row
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('interviews')
+        .insert([{
+          room_id: roomId,
+          hr_user_id: socket.data.userId,
+          candidate_user_id: room.candidateUser?.authUserId || null,
+          status: 'active',
+          started_at: new Date().toISOString()
+        }])
+        .select()
+        .single();
       
-      const options = {
-        model: "nova-2",
-        smart_format: true,
-        encoding: "linear16",
-        sample_rate: streamSampleRate,
-      };
-
-      try {
-        // Standard v3 pattern
-        dgConnection = deepgram.listen.live(options);
-        
-        dgConnection.on(LiveTranscriptionEvents.Transcript, (data) => {
-          console.log("[DEEPGRAM EVENT - RESULTS]", data.channel ? JSON.stringify(data.channel.alternatives[0]) : "no alternatives data");
-          const transcript = data.channel.alternatives[0].transcript;
-          const confidence = data.channel.alternatives[0].confidence || 1.0;
-          
-          if (transcript && transcript.trim() && activeRoomId) {
-            const isFinal = data.is_final === true || data.speech_final === true;
-            const room = getRoom(activeRoomId);
-            if (!room) return;
-
-            // 1. Interruption Check:
-            // Finalize any active live block belonging to OTHER speakers immediately
-            for (const [otherUserName, otherBuffer] of room.activeSpeakers) {
-              if (otherUserName !== userName) {
-                const otherTimeoutKey = `${activeRoomId}-${otherUserName}`;
-                if (speakerTimeouts.has(otherTimeoutKey)) {
-                  clearTimeout(speakerTimeouts.get(otherTimeoutKey));
-                  speakerTimeouts.delete(otherTimeoutKey);
-                }
-
-                const otherBlock = room.blocks.find(b => b.id === otherBuffer.blockId);
-                if (otherBlock) {
-                  otherBlock.status = "final";
-                  otherBlock.isLive = false;
-                  otherBlock.isFinal = true;
-                  otherBlock.version += 1;
-                  otherBlock.updatedAt = Date.now();
-
-                  console.log(`[Turn Engine] Interruption: Finalizing ${otherUserName}'s block due to ${userName}`);
-                  io.to(activeRoomId).emit("block-update", otherBlock);
-                }
-                room.activeSpeakers.delete(otherUserName);
-              }
-            }
-
-            // 2. Live Block Creation:
-            // Instantiate a new TranscriptBlock if no active turn is registered
-            if (!room.activeSpeakers.has(userName)) {
-              const blockId = `block-${activeRoomId}-${userName}-${Date.now()}`;
-              const newBlock = {
-                id: blockId,
-                speakerId: speakerId,
-                speakerName: userName,
-                content: "",
-                segments: [],
-                status: "live",
-                isLive: true,
-                isFinal: false,
-                version: 1,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-                editableBy: [userName],
-                roomId: activeRoomId
-              };
-
-              addBlock(activeRoomId, newBlock);
-
-              room.activeSpeakers.set(userName, {
-                blockId: blockId,
-                committedSegments: [],
-                liveSegment: null
-              });
-
-              console.log(`[Turn Engine] Created new live block ${blockId} for ${userName}`);
-            }
-
-            // 3. Live Text Segment Aggregation:
-            const buffer = room.activeSpeakers.get(userName);
-            const block = room.blocks.find(b => b.id === buffer.blockId);
-
-            if (block) {
-              const segment = {
-                text: transcript.trim(),
-                isFinal: isFinal,
-                timestamp: Date.now(),
-                confidence: confidence
-              };
-
-              if (!isFinal) {
-                buffer.liveSegment = segment;
-                block.segments = [...buffer.committedSegments, buffer.liveSegment];
-              } else {
-                buffer.committedSegments.push(segment);
-                buffer.liveSegment = null;
-                block.segments = buffer.committedSegments;
-              }
-
-              // Compile card content cache (increment version to reconcile out-of-order client packets)
-              block.content = block.segments.map(s => s.text).join(" ");
-              block.updatedAt = Date.now();
-              block.version += 1;
-
-              console.log(`[Turn Engine] Emitting card update for ${userName} (${isFinal ? "FINAL" : "PARTIAL"}): ${block.content}`);
-              io.to(activeRoomId).emit("block-update", block);
-
-              // 4. Silence Segmentation (Out-of-band Timeout Registry):
-              if (isFinal) {
-                const timeoutKey = `${activeRoomId}-${userName}`;
-
-                if (speakerTimeouts.has(timeoutKey)) {
-                  clearTimeout(speakerTimeouts.get(timeoutKey));
-                }
-
-                const timer = setTimeout(() => {
-                  const finalBlock = room.blocks.find(b => b.id === buffer.blockId);
-                  if (finalBlock) {
-                    finalBlock.status = "final";
-                    finalBlock.isLive = false;
-                    finalBlock.isFinal = true;
-                    finalBlock.version += 1;
-                    finalBlock.updatedAt = Date.now();
-
-                    console.log(`[Turn Engine] Silence timeout fired. Finalizing block ${buffer.blockId} for ${userName}`);
-                    io.to(activeRoomId).emit("block-update", finalBlock);
-                  }
-                  room.activeSpeakers.delete(userName);
-                  speakerTimeouts.delete(timeoutKey);
-                }, 5000);
-
-                speakerTimeouts.set(timeoutKey, timer);
-              }
-            }
-          }
-        });
-
-        dgConnection.on(LiveTranscriptionEvents.Open, () => {
-          console.log("[DEEPGRAM EVENT - OPEN]. [DG OPEN]. Flushing queue:", audioQueue.length);
-          isDeepgramConnecting = false;
-          isDgOpen = true;
-          
-          console.log("[QUEUE FLUSH START]", audioQueue.length);
-          // Flush any queued audio
-          while (audioQueue.length > 0) {
-            const chunk = audioQueue.shift();
-            console.log("[PCM TO DG]", chunk.byteLength);
-            try {
-              dgConnection.send(chunk);
-            } catch (sendErr) {
-              console.error("[DEEPGRAM SEND ERROR - FLUSH]:", sendErr);
-            }
-          }
-          console.log("[QUEUE FLUSH END]");
-        });
-
-        dgConnection.on(LiveTranscriptionEvents.Close, (e) => {
-          console.log("[DEEPGRAM EVENT - CLOSE]. [DG CLOSE]", e);
-          dgConnection = null;
-          isDeepgramConnecting = false;
-          isDgOpen = false;
-        });
-
-        dgConnection.on(LiveTranscriptionEvents.Error, (err) => {
-          console.error("[DEEPGRAM EVENT - ERROR]. [DG ERROR]:", err);
-          dgConnection = null;
-          isDeepgramConnecting = false;
-          isDgOpen = false;
-          audioQueue = [];
-        });
-
-      } catch (err) {
-        console.error("[Deepgram] Crash caught:", err.message);
-        dgConnection = null;
-        isDeepgramConnecting = false;
-        isDgOpen = false;
-        audioQueue = [];
+      if (!error && data) {
+        room.interviewSessionId = data.id;
+        console.log(`[DB] Created interview session: ${data.id}`);
+      } else {
+        console.error("[DB Error] Failed to create interview:", error);
       }
+    } catch (e) {
+      console.error("[DB Catch] Error creating interview:", e);
     }
 
-    // Process chunk
-    const isReady = isDgOpen || (dgConnection && dgConnection.socket && dgConnection.socket.readyState === 1);
+    io.to(roomId).emit("transcription-starting", { countdown: 10 });
     
-    if (dgConnection && isReady) {
-      console.log("[PCM TO DG]", audio.byteLength);
-      try {
-        dgConnection.send(audio);
-      } catch (sendErr) {
-        console.error("[DEEPGRAM SEND ERROR]:", sendErr);
-      }
-    } else if (isDeepgramConnecting) {
-      const readyStateVal = dgConnection 
-        ? (dgConnection.getReadyState ? dgConnection.getReadyState() : (dgConnection.socket ? dgConnection.socket.readyState : "no socket"))
-        : "null";
-      console.log("[DG READY STATE]", readyStateVal);
-      console.log("[PCM QUEUED]", audio.byteLength);
-      audioQueue.push(audio);
-      if (audioQueue.length > 100) audioQueue.shift(); // Safety limit (approx 4-5 seconds)
-    }
-  });
+    let countdown = 10;
+    const interval = setInterval(() => {
+      countdown--;
+      io.to(roomId).emit("countdown-tick", { countdown });
+      
+      if (countdown <= 0) {
+        clearInterval(interval);
+        room.state = "transcribing";
+        room.activeTranscriptionSession.isActive = true;
+        room.activeTranscriptionSession.startedAt = Date.now();
+        broadcastProjectedRoomState(roomId);
 
-  // Mute toggle (Commit and finalize active blocks immediately)
-  socket.on("toggle-mute", ({ roomId, isMuted }) => {
-    toggleMute(roomId, socket.id, isMuted);
-    broadcastRoomState(roomId);
-    
-    const userName = socket.data.userName;
-    if (isMuted && userName && roomId) {
-      const timeoutKey = `${roomId}-${userName}`;
-      if (speakerTimeouts.has(timeoutKey)) {
-        clearTimeout(speakerTimeouts.get(timeoutKey));
-        speakerTimeouts.delete(timeoutKey);
-      }
-
-      const room = getRoom(roomId);
-      if (room && room.activeSpeakers.has(userName)) {
-        const buffer = room.activeSpeakers.get(userName);
-        const block = room.blocks.find(b => b.id === buffer.blockId);
-        if (block) {
-          block.status = "final";
-          block.isLive = false;
-          block.isFinal = true;
-          block.version += 1;
-          block.updatedAt = Date.now();
-          io.to(roomId).emit("block-update", block);
+        // Open Deepgram Session at room scope
+        let dgState = activeDeepgramConnections.get(roomId);
+        if (!dgState) {
+          dgState = {
+            dgConnection: null,
+            isDeepgramConnecting: false,
+            isDgOpen: false,
+            audioQueue: []
+          };
+          activeDeepgramConnections.set(roomId, dgState);
         }
-        room.activeSpeakers.delete(userName);
-      }
-    }
 
-    if (isMuted && dgConnection) {
-      dgConnection.requestClose();
-      dgConnection = null;
-    }
+        if (!dgState.dgConnection && !dgState.isDeepgramConnecting) {
+          dgState.isDeepgramConnecting = true;
+          dgState.audioQueue = [];
+          try {
+            console.log(`[Deepgram] Starting live transcription for room ${roomId}`);
+            const dgConnection = deepgram.listen.live({ model: "nova-2", smart_format: true, encoding: "linear16", sample_rate: 16000 });
+            dgState.dgConnection = dgConnection;
+            setupDeepgramEvents(dgConnection, roomId, room.candidateUser?.name || "Candidate", room.candidateUser?.id);
+          } catch (err) {
+            console.error("[Deepgram] Start failed:", err);
+            dgState.isDeepgramConnecting = false;
+            dgState.isDgOpen = false;
+          }
+        }
+      }
+    }, 1000);
   });
 
-  // Manual transcript edits (Strict permission and state validation)
-  socket.on("transcript-edit", ({ roomId, blockId, content }) => {
-    const userName = socket.data.userName;
-    if (!roomId || !blockId || !userName) return;
-
+  socket.on("end-interview", async ({ roomId }) => {
+    if (socket.data.role !== "hr" && socket.data.role !== "super_admin") return;
+    
     const room = getRoom(roomId);
     if (!room) return;
 
-    const block = room.blocks.find(b => b.id === blockId);
-    if (!block) return;
+    room.state = "ended";
+    room.activeTranscriptionSession.isActive = false;
+    finalizeAllActiveSpeakers(roomId);
 
-    // Validate block is finalized
-    if (block.status !== "final") {
-      console.log(`[Edit Guard] Block ${blockId} is not finalized yet.`);
-      return;
+    const dgState = activeDeepgramConnections.get(roomId);
+    if (dgState && dgState.dgConnection) {
+      try { dgState.dgConnection.requestClose(); } catch (e) {}
+      activeDeepgramConnections.delete(roomId);
     }
 
-    // Validate ownership permission
-    if (!block.editableBy.includes(userName)) {
-      console.log(`[Edit Guard] Permission denied for ${userName} to edit ${blockId}.`);
-      return;
+    // Build flattened transcript
+    const finalTranscript = room.blocks.map(b => `${b.speakerName}: ${b.content}`).join("\n\n");
+
+    // Persist to Supabase
+    if (room.interviewSessionId) {
+      try {
+        await supabaseAdmin
+          .from('interviews')
+          .update({
+            status: 'completed',
+            ended_at: new Date().toISOString(),
+            final_transcript: finalTranscript
+          })
+          .eq('id', room.interviewSessionId);
+          
+        const formattedBlocks = room.blocks.map(b => ({
+          id: b.id, // Assuming UUID is used for block ids now, or generate them
+          interview_id: room.interviewSessionId,
+          speaker: b.speakerName,
+          content: b.content,
+          confidence: 1.0, // simplified
+          version: b.version,
+          started_at: b.createdAt ? new Date(b.createdAt).toISOString() : new Date().toISOString(),
+          ended_at: b.updatedAt ? new Date(b.updatedAt).toISOString() : new Date().toISOString()
+        }));
+
+        if (formattedBlocks.length > 0) {
+          await supabaseAdmin.from('transcript_blocks').insert(formattedBlocks);
+        }
+        console.log(`[DB] Successfully persisted interview ${room.interviewSessionId}`);
+      } catch (err) {
+        console.error("[DB Error] Persistence failed:", err);
+      }
     }
 
-    // Perform the edit and increment version
-    updateBlockContent(roomId, blockId, content);
-    console.log(`[Turn Engine] User ${userName} edited block ${blockId} content to: ${content}`);
+    io.to(roomId).emit("interview-ended");
+    broadcastProjectedRoomState(roomId);
+  });
+
+  // STRICT PCM ROUTING AUTHORITY
+  socket.on("audio-chunk", ({ roomId, audio }) => {
+    const activeRoomId = roomId || socket.data.roomId;
+    if (!activeRoomId) return;
     
-    // Broadcast the updated state to keep all room clients in sync (low-frequency action)
-    broadcastRoomState(roomId);
-  });
-
-  // Speaking indicator (legacy, kept for compatibility if needed)
-  socket.on("speaking", ({ roomId, isSpeaking }) => {
-    setSpeaking(roomId, socket.id, isSpeaking);
-    socket.to(roomId).emit("user-speaking", {
-      userId: socket.id,
-      isSpeaking,
-    });
-  });
-
-  // Leave room
-  socket.on("leave-room", () => {
-    handleLeave(socket);
-  });
-
-  // Disconnect
-  socket.on("disconnect", () => {
-    if (dgConnection) {
-      dgConnection.requestClose();
-      dgConnection = null;
+    const room = getRoom(activeRoomId);
+    
+    // Only process if it's the candidate and transcription is active
+    if (!room || !room.activeTranscriptionSession.isActive || socket.data.role !== "candidate") {
+      // Discard PCM payload
+      return; 
     }
-    console.log(`[Socket] Disconnected: ${socket.id}`);
+
+    const dgState = activeDeepgramConnections.get(activeRoomId);
+    if (dgState) {
+      const isReady = dgState.isDgOpen || (dgState.dgConnection && dgState.dgConnection.socket && dgState.dgConnection.socket.readyState === 1);
+      if (dgState.dgConnection && isReady) {
+        try { dgState.dgConnection.send(audio); } catch(e) {}
+      } else if (dgState.isDeepgramConnecting) {
+        dgState.audioQueue.push(audio);
+        if (dgState.audioQueue.length > 100) dgState.audioQueue.shift();
+      }
+    }
+  });
+
+  function setupDeepgramEvents(dg, roomId, userName, speakerId) {
+    dg.on(LiveTranscriptionEvents.Open, () => {
+      console.log(`[Deepgram] Connection opened for room: ${roomId}`);
+      const dgState = activeDeepgramConnections.get(roomId);
+      if (dgState) {
+        dgState.isDeepgramConnecting = false;
+        dgState.isDgOpen = true;
+        while (dgState.audioQueue.length > 0) {
+          try { dg.send(dgState.audioQueue.shift()); } catch(e) {}
+        }
+      }
+    });
+
+    dg.on(LiveTranscriptionEvents.Transcript, (data) => {
+      const transcript = data.channel.alternatives[0].transcript;
+      if (transcript && transcript.trim() && roomId) {
+        const isFinal = data.is_final === true || data.speech_final === true;
+        const room = getRoom(roomId);
+        if (!room) return;
+
+        // Turn Engine logic
+        if (!room.activeSpeakers.has(userName)) {
+          const crypto = require('crypto');
+          const blockId = crypto.randomUUID(); // uuid v4
+          
+          let speakerRole = "candidate";
+          if (room.hrUser && room.hrUser.name === userName) {
+            speakerRole = "hr";
+          } else if (room.candidateUser && room.candidateUser.name === userName) {
+            speakerRole = "candidate";
+          }
+
+          const newBlock = {
+            id: blockId,
+            speakerId: speakerId,
+            speakerName: userName,
+            speakerRole: speakerRole,
+            content: "",
+            segments: [],
+            status: "live",
+            isLive: true,
+            isFinal: false,
+            version: 1,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            editableBy: [userName, room.hrUser?.name].filter(Boolean),
+            roomId: roomId
+          };
+          addBlock(roomId, newBlock);
+          room.activeSpeakers.set(userName, { blockId: blockId, committedSegments: [], liveSegment: null });
+        }
+
+        const buffer = room.activeSpeakers.get(userName);
+        const block = room.blocks.find(b => b.id === buffer.blockId);
+
+        if (block) {
+          if (!isFinal) {
+            buffer.liveSegment = { text: transcript.trim(), isFinal, timestamp: Date.now() };
+            block.segments = [...buffer.committedSegments, buffer.liveSegment];
+          } else {
+            buffer.committedSegments.push({ text: transcript.trim(), isFinal, timestamp: Date.now() });
+            buffer.liveSegment = null;
+            block.segments = buffer.committedSegments;
+          }
+
+          block.content = block.segments.map(s => s.text).join(" ");
+          block.updatedAt = Date.now();
+          block.version += 1;
+
+          io.to(roomId).emit("block-update", block);
+
+          // Silence segmentation
+          if (isFinal) {
+            const timeoutKey = `${roomId}-${userName}`;
+            if (speakerTimeouts.has(timeoutKey)) clearTimeout(speakerTimeouts.get(timeoutKey));
+            
+            speakerTimeouts.set(timeoutKey, setTimeout(() => {
+              const finalBlock = room.blocks.find(b => b.id === buffer.blockId);
+              if (finalBlock) {
+                finalBlock.status = "final";
+                finalBlock.isLive = false;
+                finalBlock.isFinal = true;
+                finalBlock.version += 1;
+                finalBlock.updatedAt = Date.now();
+                io.to(roomId).emit("block-update", finalBlock);
+              }
+              room.activeSpeakers.delete(userName);
+              speakerTimeouts.delete(timeoutKey);
+            }, 3000));
+          }
+        }
+      }
+    });
+
+    dg.on(LiveTranscriptionEvents.Close, () => {
+      console.log(`[Deepgram] Connection closed for room: ${roomId}`);
+      activeDeepgramConnections.delete(roomId);
+    });
+
+    dg.on(LiveTranscriptionEvents.Error, (err) => {
+      console.error(`[Deepgram] Connection error for room ${roomId}:`, err);
+      activeDeepgramConnections.delete(roomId);
+    });
+  }
+
+  socket.on("toggle-mute", ({ roomId, isMuted }) => {
+    toggleMute(roomId, socket.id, isMuted);
+    broadcastProjectedRoomState(roomId);
+  });
+
+  socket.on("transcript-edit", ({ roomId, blockId, content }) => {
+    updateBlockContent(roomId, blockId, content);
+    broadcastProjectedRoomState(roomId);
+  });
+
+  socket.on("clear-transcript", ({ roomId }) => {
+    const room = getRoom(roomId);
+    if (room) {
+      room.blocks = [];
+      room.activeSpeakers.clear();
+      broadcastProjectedRoomState(roomId);
+    }
+  });
+
+  socket.on("transcript-replace", ({ roomId, content }) => {
+    const room = getRoom(roomId);
+    if (room) {
+      const crypto = require('crypto');
+      const blockId = crypto.randomUUID();
+      const newBlock = {
+        id: blockId,
+        speakerId: room.candidateUser?.id || "",
+        speakerName: room.candidateUser?.name || "Candidate",
+        speakerRole: "candidate",
+        content: content,
+        segments: [{ text: content, isFinal: true, timestamp: Date.now() }],
+        status: "final",
+        isLive: false,
+        isFinal: true,
+        version: 1,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        editableBy: [room.candidateUser?.name, room.hrUser?.name].filter(Boolean),
+        roomId: roomId
+      };
+      room.blocks = [newBlock];
+      room.activeSpeakers.clear();
+      broadcastProjectedRoomState(roomId);
+    }
+  });
+
+  socket.on("leave-room", () => handleLeave(socket));
+  socket.on("disconnect", () => {
     handleLeave(socket);
   });
 });
 
 function handleLeave(socket) {
   const roomId = socket.data.roomId;
-  const userName = socket.data.userName;
+  const role = socket.data.role;
   if (roomId) {
-    // 1. Clean up timeouts
-    if (userName) {
-      const timeoutKey = `${roomId}-${userName}`;
-      if (speakerTimeouts.has(timeoutKey)) {
-        clearTimeout(speakerTimeouts.get(timeoutKey));
-        speakerTimeouts.delete(timeoutKey);
+    const room = getRoom(roomId);
+    if (room && role === "hr") {
+      console.log(`[Socket] Interviewer (HR) left/disconnected room ${roomId}. Closing room.`);
+      
+      // Notify remaining participants in the room
+      io.to(roomId).emit("room-closed", "The Interviewer (HR) has disconnected. The session is closed.");
+      
+      // Finalize and save blocks
+      finalizeAllActiveSpeakers(roomId);
+      const finalTranscript = room.blocks.map(b => `${b.speakerName}: ${b.content}`).join("\n\n");
+      if (room.interviewSessionId) {
+        supabaseAdmin
+          .from('interviews')
+          .update({
+            status: 'completed',
+            ended_at: new Date().toISOString(),
+            final_transcript: finalTranscript
+          })
+          .eq('id', room.interviewSessionId)
+          .then(() => console.log(`[DB] Successfully closed session on HR disconnect: ${room.interviewSessionId}`))
+          .catch(err => console.error("[DB Error] HR disconnect persistence failed:", err));
       }
-
-      // 2. Finalize any active speech turn block
-      const room = getRoom(roomId);
-      if (room && room.activeSpeakers.has(userName)) {
-        const buffer = room.activeSpeakers.get(userName);
-        const block = room.blocks.find(b => b.id === buffer.blockId);
-        if (block) {
-          block.status = "final";
-          block.isLive = false;
-          block.isFinal = true;
-          block.version += 1;
-          block.updatedAt = Date.now();
+      
+      // Clean up Deepgram connection
+      const dgState = activeDeepgramConnections.get(roomId);
+      if (dgState && dgState.dgConnection) {
+        try { dgState.dgConnection.requestClose(); } catch (e) {}
+        activeDeepgramConnections.delete(roomId);
+      }
+      
+      // Evict all sockets in that room
+      const { regular, superAdmin } = getRoomSocketsByRole(roomId);
+      const allSockets = [...regular, ...superAdmin];
+      allSockets.forEach(sid => {
+        const s = io.sockets.sockets.get(sid);
+        if (s) {
+          s.leave(roomId);
+          s.data.roomId = null;
         }
-        room.activeSpeakers.delete(userName);
-      }
+      });
+      
+      deleteRoom(roomId);
+      return;
     }
 
-    leaveRoom(roomId, socket.id);
-    broadcastRoomState(roomId);
+    finalizeAllActiveSpeakers(roomId);
+    const updatedRoom = leaveRoom(roomId, socket.id);
+    if (!updatedRoom) {
+      const dgState = activeDeepgramConnections.get(roomId);
+      if (dgState && dgState.dgConnection) {
+        try { dgState.dgConnection.requestClose(); } catch (e) {}
+        activeDeepgramConnections.delete(roomId);
+      }
+    } else {
+      broadcastProjectedRoomState(roomId);
+    }
     socket.leave(roomId);
-    console.log(`[Room] ${socket.data.userName} left room ${roomId}`);
-    socket.data.roomId = null;
-    socket.data.userName = null;
   }
 }
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`[Railway] Server is active and listening on port ${PORT}`);
+  console.log(`[Railway] Server active on port ${PORT}`);
 });
-
