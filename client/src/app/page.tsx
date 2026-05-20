@@ -6,30 +6,56 @@ import { useSocket } from "@/hooks/useSocket";
 import { useAgora } from "@/hooks/useAgora";
 import { useDeepgram } from "@/hooks/useDeepgram";
 
-import { useSession, signIn, signOut } from "next-auth/react";
+import { supabase } from "@/lib/supabase";
+import { Session } from "@supabase/supabase-js";
 
 // Dynamic imports to avoid SSR issues with browser-only APIs
 const Lobby = dynamic(() => import("@/components/Lobby"), { ssr: false });
 const RoomPage = dynamic(() => import("@/components/RoomPage"), { ssr: false });
 
 export default function Home() {
-  const { data: session, status } = useSession();
+  const [session, setSession] = useState<Session | null>(null);
+  const [loadingSession, setLoadingSession] = useState(true);
+  
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoadingSession(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
   const [inRoom, setInRoom] = useState(false);
   const [roomId, setRoomId] = useState("");
   const [userName, setUserName] = useState("");
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string>(
+    typeof window !== "undefined" ? sessionStorage.getItem("intendedRole") || "candidate" : "candidate"
+  );
 
   const {
     socketId,
     isConnected,
     users,
     blocks,
+    activeTranscriptionSession,
     joinRoom,
     leaveRoom: socketLeaveRoom,
     emitMuteToggle,
     emitTranscriptEdit,
+    emitClearTranscript,
+    emitTranscriptReplace,
+    emitStartTranscription,
+    emitStopTranscription,
     socket,
-  } = useSocket();
+  } = useSocket(session?.access_token);
 
   const {
     joinChannel,
@@ -46,7 +72,6 @@ export default function Home() {
   const {
     startTranscription,
     stopTranscription,
-    isTranscribing,
   } = useDeepgram({ socket, roomId, userName });
 
   // 1. Permanent Transcription Lifecycle
@@ -73,16 +98,54 @@ export default function Home() {
     }
   }, [inRoom, getMediaStream, startTranscription, stopTranscription, getLocalTrack]);
 
+  useEffect(() => {
+    if (!socket) return;
+    
+    const handleJoinError = async (message: string) => {
+      console.error("[Socket] Join error received:", message);
+      setJoinError(message);
+      setInRoom(false);
+      setRoomId("");
+      setUserName("");
+      roomIdRef.current = "";
+      await leaveChannel();
+      socketLeaveRoom();
+    };
+
+    const handleRoomClosed = async (message: string) => {
+      console.warn("[Socket] Room closed received:", message);
+      setJoinError(message);
+      setInRoom(false);
+      setRoomId("");
+      setUserName("");
+      roomIdRef.current = "";
+      await leaveChannel();
+      socketLeaveRoom();
+    };
+
+    socket.on("join-error", handleJoinError);
+    socket.on("room-closed", handleRoomClosed);
+    return () => {
+      socket.off("join-error", handleJoinError);
+      socket.off("room-closed", handleRoomClosed);
+    };
+  }, [socket, leaveChannel, socketLeaveRoom]);
 
   const handleJoinRoom = useCallback(
-    async (newRoomId: string, newUserName: string, token?: string) => {
+    async (newRoomId: string, newUserName: string, role: string, token?: string) => {
       try {
         setJoinError(null);
         setRoomId(newRoomId);
         setUserName(newUserName);
         roomIdRef.current = newRoomId;
 
-        joinRoom(newRoomId, newUserName);
+        // Ensure session storage matches reality
+        sessionStorage.setItem("intendedRole", role);
+        setUserRole(role);
+
+        joinRoom(newRoomId, newUserName, role);
+
+        const tokenRole = role === "super_admin" ? "audience" : "broadcaster";
 
         let agoraToken = token;
         if (!agoraToken) {
@@ -91,7 +154,7 @@ export default function Home() {
             if (socketUrl && !socketUrl.startsWith("http://") && !socketUrl.startsWith("https://")) {
               socketUrl = `https://${socketUrl}`;
             }
-            const res = await fetch(`${socketUrl}/api/token?channelName=${newRoomId}`);
+            const res = await fetch(`${socketUrl}/api/token?channelName=${newRoomId}&role=${tokenRole}`);
             const data = await res.json();
             agoraToken = data.token;
           } catch (e) {
@@ -100,7 +163,7 @@ export default function Home() {
         }
 
         // Just join Agora. The useEffect above will handle starting Deepgram.
-        await joinChannel(newRoomId, agoraToken);
+        await joinChannel(newRoomId, agoraToken, undefined, role);
         setInRoom(true);
       } catch (err: any) {
         console.error("Failed to join room:", err);
@@ -142,12 +205,16 @@ export default function Home() {
     });
   }, [agoraToggleMute, emitMuteToggle, roomId, getLocalTrack]);
 
+  useEffect(() => {
+    // Legacy auto-join logic removed to enforce Lobby flow
+  }, []);
+
   const handleEditBlock = useCallback((blockId: string, content: string) => {
     emitTranscriptEdit(roomId, blockId, content);
   }, [emitTranscriptEdit, roomId]);
 
   // Loading state
-  if (status === "loading") {
+  if (loadingSession) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#07070a]">
         <div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin" />
@@ -157,28 +224,10 @@ export default function Home() {
 
   // Not authenticated state
   if (!session) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-[#07070a] px-4">
-        <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-blue-600/10 rounded-full blur-[150px] pointer-events-none" />
-        <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-purple-600/10 rounded-full blur-[150px] pointer-events-none" />
-        
-        <div className="relative z-10 text-center space-y-6 max-w-md">
-          <div className="w-20 h-20 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-3xl flex items-center justify-center mx-auto shadow-2xl shadow-blue-500/20">
-            <svg className="w-10 h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-            </svg>
-          </div>
-          <h1 className="text-4xl font-bold text-white tracking-tight">LiveRoom</h1>
-          <p className="text-gray-400 text-lg">Secure real-time voice and AI transcription. Sign in to start chatting.</p>
-          <button
-            onClick={() => signIn("credentials", { username: `User_${Math.floor(Math.random() * 1000)}`, callbackUrl: "/" })}
-            className="w-full py-4 bg-white text-black font-bold rounded-2xl hover:bg-gray-200 transition-all shadow-xl active:scale-[0.98]"
-          >
-            Get Started
-          </button>
-        </div>
-      </div>
-    );
+    if (typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
+    return null;
   }
 
   if (!inRoom) {
@@ -186,7 +235,7 @@ export default function Home() {
       <>
         <div className="fixed top-4 right-4 z-50">
            <button 
-             onClick={() => signOut()}
+             onClick={() => supabase.auth.signOut()}
              className="px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-xs hover:bg-white/10 transition-all"
            >
              Sign Out
@@ -195,9 +244,10 @@ export default function Home() {
         <Lobby 
           onJoinRoom={handleJoinRoom} 
           isConnected={isConnected} 
-          defaultName={session.user?.name || ""} 
+          defaultName={session.user?.email?.split('@')[0] || "User"} 
           joinError={joinError}
           onClearError={() => setJoinError(null)}
+          accessToken={session?.access_token}
         />
       </>
     );
@@ -210,13 +260,18 @@ export default function Home() {
       users={users}
       blocks={blocks}
       currentUserId={socketId}
+      userRole={userRole}
       isMuted={isMuted}
       isConnected={isConnected}
       isAgoraJoined={isAgoraJoined}
-      isTranscribing={isTranscribing}
+      isTranscribing={activeTranscriptionSession?.isActive || false}
       onToggleMute={handleToggleMute}
       onLeaveRoom={handleLeaveRoom}
       onEditBlock={handleEditBlock}
+      onClearTranscript={emitClearTranscript}
+      onReplaceTranscript={emitTranscriptReplace}
+      onStartTranscription={emitStartTranscription}
+      onStopTranscription={emitStopTranscription}
     />
   );
 }

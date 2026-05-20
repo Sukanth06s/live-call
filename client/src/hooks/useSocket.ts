@@ -10,30 +10,40 @@ if (SOCKET_URL && !SOCKET_URL.startsWith("http://") && !SOCKET_URL.startsWith("h
 }
 
 
-export function useSocket() {
+export function useSocket(sessionToken?: string) {
   const socketRef = useRef<Socket | null>(null);
   const roomIdRef = useRef<string | null>(null);
   const userNameRef = useRef<string | null>(null);
+  const roleRef = useRef<string>(typeof window !== "undefined" ? sessionStorage.getItem("intendedRole") || "candidate" : "candidate");
+  const [socketId, setSocketId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [users, setUsers] = useState<RoomUser[]>([]);
   const [blocks, setBlocks] = useState<TranscriptBlock[]>([]);
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
+  const [activeTranscriptionSession, setActiveTranscriptionSession] = useState<any>(null);
 
   useEffect(() => {
+    if (!sessionToken) return;
+
     const socket = io(SOCKET_URL, {
       transports: ["websocket"],
       autoConnect: true,
       withCredentials: true,
+      auth: { 
+        token: sessionToken,
+        role: typeof window !== "undefined" ? sessionStorage.getItem("intendedRole") || "candidate" : "candidate"
+      },
     });
 
     socketRef.current = socket;
 
     socket.on("connect", () => {
       setIsConnected(true);
+      setSocketId(socket.id ?? null);
       console.log("[Socket] Connected:", socket.id);
       if (roomIdRef.current && userNameRef.current) {
-        console.log("[Socket] Reconnected. Auto-rejoining room:", roomIdRef.current, "as", userNameRef.current);
-        socket.emit("join-room", { roomId: roomIdRef.current, userName: userNameRef.current });
+        console.log("[Socket] Reconnected. Auto-rejoining room:", roomIdRef.current, "as", userNameRef.current, "role:", roleRef.current);
+        socket.emit("join-room", { roomId: roomIdRef.current, userName: userNameRef.current, role: roleRef.current });
       }
     });
 
@@ -44,13 +54,21 @@ export function useSocket() {
 
     socket.on("disconnect", () => {
       setIsConnected(false);
+      setSocketId(null);
       console.log("[Socket] Disconnected");
+    });
+
+    socket.on("connect_error", (err) => {
+      console.error(`[Socket] connect_error: ${err.message}`);
     });
 
     socket.on("room-state", (state) => {
       console.log("[Socket] Received room-state:", state);
       setUsers(state.users);
       setBlocks(state.blocks || []);
+      if (state.activeTranscriptionSession) {
+        setActiveTranscriptionSession(state.activeTranscriptionSession);
+      }
     });
 
     // Legacy speaking indicators - room-state or block-update will handle visual speaking states
@@ -80,13 +98,16 @@ export function useSocket() {
     return () => {
       socket.disconnect();
     };
-  }, []);
+  }, [sessionToken]);
 
-  const joinRoom = useCallback((roomId: string, userName: string) => {
+  const joinRoom = useCallback((roomId: string, userName: string, role?: string) => {
     if (socketRef.current) {
       roomIdRef.current = roomId;
       userNameRef.current = userName;
-      socketRef.current.emit("join-room", { roomId, userName });
+      if (role) {
+        roleRef.current = role;
+      }
+      socketRef.current.emit("join-room", { roomId, userName, role: roleRef.current });
       setCurrentRoomId(roomId);
     }
   }, []);
@@ -123,16 +144,37 @@ export function useSocket() {
 
   return {
     socket: socketRef.current,
-    socketId: socketRef.current?.id || null,
+    socketId,
     isConnected,
     users,
     blocks,
     currentRoomId,
+    activeTranscriptionSession,
     joinRoom,
     leaveRoom,
     emitMuteToggle,
     emitSpeaking,
     emitTranscriptEdit,
+    emitClearTranscript: useCallback(() => {
+      if (socketRef.current) {
+        socketRef.current.emit("clear-transcript", { roomId: roomIdRef.current });
+      }
+    }, []),
+    emitTranscriptReplace: useCallback((content: string) => {
+      if (socketRef.current) {
+        socketRef.current.emit("transcript-replace", { roomId: roomIdRef.current, content });
+      }
+    }, []),
+    emitStartTranscription: useCallback(() => {
+      if (socketRef.current) {
+        socketRef.current.emit("start-transcription", { roomId: roomIdRef.current });
+      }
+    }, []),
+    emitStopTranscription: useCallback(() => {
+      if (socketRef.current) {
+        socketRef.current.emit("end-interview", { roomId: roomIdRef.current });
+      }
+    }, []),
   };
 }
 

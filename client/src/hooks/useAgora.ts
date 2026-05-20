@@ -16,8 +16,14 @@ export function useAgora() {
   const [isJoined, setIsJoined] = useState(false);
   const [remoteUsers, setRemoteUsers] = useState<IAgoraRTCRemoteUser[]>([]);
 
-  const joinChannel = useCallback(async (channelName: string, token?: string, uid?: string) => {
+  const joinChannel = useCallback(async (channelName: string, token?: string, uid?: string, role: string = "candidate") => {
     if (clientRef.current) return;
+    
+    console.log("[Agora] Attempting to join channel:");
+    console.log(" - APP_ID:", APP_ID ? `${APP_ID.substring(0, 5)}...` : "EMPTY!");
+    console.log(" - ChannelName:", channelName);
+    console.log(" - HasToken:", !!token);
+    console.log(" - Role:", role);
 
     // Dynamic import to avoid SSR issues
     const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
@@ -48,16 +54,19 @@ export function useAgora() {
     // Join channel (token optional)
     await client.join(APP_ID, channelName, token || null, uid || null);
 
-    // Create and publish local mic track
-    const micTrack = await AgoraRTC.createMicrophoneAudioTrack({
-      encoderConfig: "speech_standard",
-    });
-    localTrackRef.current = micTrack;
-
-    await client.publish([micTrack]);
-    setIsJoined(true);
-
-    return micTrack;
+    // Only create and publish mic track if not super_admin
+    if (role !== "super_admin") {
+      const micTrack = await AgoraRTC.createMicrophoneAudioTrack({
+        encoderConfig: "speech_standard",
+      });
+      localTrackRef.current = micTrack;
+      await client.publish([micTrack]);
+      setIsJoined(true);
+      return micTrack;
+    } else {
+      setIsJoined(true);
+      return null;
+    }
   }, []);
 
   const leaveChannel = useCallback(async () => {

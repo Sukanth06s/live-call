@@ -9,58 +9,12 @@ interface TranscriptPanelProps {
   currentUserName: string | null;
   roomId: string;
   onEditBlock: (blockId: string, content: string) => void;
-}
-
-function formatTime(ts: number) {
-  const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
-// Generate consistent color for each user
-function getUserColor(userId: string): string {
-  const colors = [
-    "from-blue-500 to-cyan-400",
-    "from-purple-500 to-pink-400",
-    "from-emerald-500 to-teal-400",
-    "from-orange-500 to-amber-400",
-    "from-rose-500 to-red-400",
-    "from-indigo-500 to-violet-400",
-    "from-sky-500 to-blue-400",
-    "from-fuchsia-500 to-purple-400",
-    "from-yellow-500 to-orange-400",
-    "from-lime-500 to-emerald-400",
-    "from-violet-600 to-indigo-500",
-    "from-pink-600 to-rose-500",
-  ];
-  let hash = 0;
-  for (let i = 0; i < userId.length; i++) {
-    hash = (hash << 5) - hash + userId.charCodeAt(i);
-    hash |= 0;
-  }
-  return colors[Math.abs(hash) % colors.length];
-}
-
-function getTextColor(userId: string): string {
-  const colors = [
-    "text-cyan-400",
-    "text-pink-400",
-    "text-teal-400",
-    "text-amber-400",
-    "text-red-400",
-    "text-violet-400",
-    "text-blue-400",
-    "text-purple-400",
-    "text-orange-400",
-    "text-emerald-400",
-    "text-fuchsia-400",
-    "text-lime-400",
-  ];
-  let hash = 0;
-  for (let i = 0; i < userId.length; i++) {
-    hash = (hash << 5) - hash + userId.charCodeAt(i);
-    hash |= 0;
-  }
-  return colors[Math.abs(hash) % colors.length];
+  onClearTranscript?: () => void;
+  onReplaceTranscript?: (content: string) => void;
+  isTranscribing?: boolean;
+  isHr?: boolean;
+  isSuperAdmin?: boolean;
+  onStopTranscription?: () => void;
 }
 
 export default function TranscriptPanel({
@@ -68,215 +22,274 @@ export default function TranscriptPanel({
   currentUserName,
   roomId,
   onEditBlock,
+  onClearTranscript,
+  onReplaceTranscript,
+  isTranscribing = false,
+  isHr = false,
+  isSuperAdmin = false,
+  onStopTranscription,
 }: TranscriptPanelProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const candidateScrollRef = useRef<HTMLDivElement>(null);
+  
+  const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
-  // Auto-scroll to bottom on new blocks or updates
+  // Track session timer
   useEffect(() => {
-    if (scrollRef.current) {
-      const scrollContainer = scrollRef.current;
+    let timer: NodeJS.Timeout;
+    if (isTranscribing) {
+      timer = setInterval(() => {
+        setElapsedSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setElapsedSeconds(0);
+    }
+    return () => clearInterval(timer);
+  }, [isTranscribing]);
+
+  const formatElapsed = (sec: number) => {
+    const mins = Math.floor(sec / 60);
+    const secs = sec % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  // Filter blocks to Candidate Blocks
+  const candidateBlocks = blocks.filter(
+    (b) => b.speakerRole === "candidate" || (!b.speakerRole && b.speakerName !== "HR" && b.speakerName !== "Interviewer")
+  );
+
+  // Auto-scroll panels
+  useEffect(() => {
+    if (candidateScrollRef.current) {
+      const container = candidateScrollRef.current;
       requestAnimationFrame(() => {
-        scrollContainer.scrollTo({
-          top: scrollContainer.scrollHeight,
+        container.scrollTo({
+          top: container.scrollHeight,
           behavior: "smooth",
         });
       });
     }
-  }, [blocks]);
+  }, [candidateBlocks, isEditing]);
 
-  const handleStartEdit = (blockId: string, initialContent: string) => {
-    setEditingBlockId(blockId);
-    setEditContent(initialContent);
+  // Handle overall transcript editing
+  const handleStartOverallEdit = () => {
+    const fullText = candidateBlocks.map((b) => b.content).join(" ");
+    setEditContent(fullText);
+    setIsEditing(true);
   };
 
-  const handleSaveEdit = (blockId: string) => {
-    if (editContent.trim()) {
-      onEditBlock(blockId, editContent.trim());
+  const handleSaveOverallEdit = () => {
+    if (onReplaceTranscript) {
+      onReplaceTranscript(editContent.trim());
     }
-    setEditingBlockId(null);
-    setEditContent("");
+    setIsEditing(false);
   };
 
-  const handleCancelEdit = () => {
-    setEditingBlockId(null);
-    setEditContent("");
+  // Word count helper
+  const getWordCount = (blockArr: TranscriptBlock[]) => {
+    const text = blockArr.map((b) => b.content).join(" ");
+    if (!text.trim()) return 0;
+    return text.trim().split(/\s+/).length;
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#07070a]">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-6 py-5 border-b border-white/[0.06] bg-[#0b0b10]/40 backdrop-blur-md">
+    <div className="flex flex-col h-full bg-[#07070a] select-none">
+      {/* GLOBAL HEADER */}
+      <div className="flex items-center gap-3 px-6 py-4 border-b border-white/[0.06] bg-[#0b0b10]/40 backdrop-blur-md">
         <div className="relative flex items-center justify-center w-2 h-2">
-          <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />
+          <div className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse" />
           <div className="absolute w-2.5 h-2.5 rounded-full bg-indigo-500 animate-ping opacity-45" />
         </div>
-        <h2 className="text-sm font-bold text-gray-200 tracking-wide">Conversational Workspace</h2>
-        <span className="ml-auto text-xs text-gray-500 font-medium">
-          {blocks.filter((b) => b.status === "final").length} finalized turns
+        <h2 className="text-sm font-bold text-gray-200 tracking-wide uppercase">Conversational Workspace</h2>
+        
+        {/* Active badge */}
+        {isTranscribing ? (
+          <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-400 font-semibold select-none">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)] animate-pulse" />
+            Live Deepgram Stream Active
+          </span>
+        ) : (
+          <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-gray-500/10 border border-gray-500/20 text-[10px] text-gray-400 font-semibold select-none">
+            <span className="w-1.5 h-1.5 rounded-full bg-gray-500" />
+            Engine Idle
+          </span>
+        )}
+
+        {/* STOP button inside header */}
+        {isHr && isTranscribing && onStopTranscription && (
+          <motion.button
+            whileTap={{ scale: 0.95 }}
+            onClick={onStopTranscription}
+            className="px-3.5 py-1 rounded-lg bg-red-500/15 border border-red-500/30 text-red-400 text-xs font-bold uppercase hover:bg-red-600 hover:text-white hover:border-red-600 transition-all duration-300 cursor-pointer shadow-md shadow-red-500/5 hover:shadow-red-500/25 ml-2"
+          >
+            Stop Transcription
+          </motion.button>
+        )}
+
+        {/* Global info metrics */}
+        <span className="ml-auto text-xs text-gray-500 font-bold uppercase tracking-wider font-mono">
+          Total Blocks: {blocks.length}
         </span>
       </div>
 
-      {/* Workspace Conversational Cards Grid */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto px-6 py-6 space-y-4 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent relative"
-      >
-        {blocks.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-gray-500 max-w-sm mx-auto text-center space-y-3">
-            <div className="w-16 h-16 rounded-2xl bg-white/[0.02] border border-white/[0.04] flex items-center justify-center text-gray-400">
-              <svg className="w-8 h-8 opacity-40 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
+      {/* SINGLE MAIN TRANSCRIPTION CONTENT BOX */}
+      <div className="flex-1 p-6 min-h-0 overflow-hidden flex flex-col bg-[#07070a]">
+        <div className="flex-1 flex flex-col h-full min-h-0 bg-[#0a0a0f]/60 border border-white/[0.05] rounded-3xl overflow-hidden shadow-2xl relative">
+          
+          {/* Box Header */}
+          <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.05] bg-[#0c0c12]/40">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)] animate-pulse" />
+                <h3 className="text-xs font-bold uppercase tracking-widest text-emerald-400">Candidate Speech Log</h3>
+              </div>
+              
+              {/* Core live stats indicators inside header */}
+              <div className="hidden md:flex items-center gap-3 border-l border-white/[0.06] pl-4 text-[10px] text-gray-500 font-bold uppercase tracking-wider font-mono">
+                <span className="flex items-center gap-1">
+                  Engine: <span className={isTranscribing ? "text-emerald-400" : "text-gray-500"}>{isTranscribing ? "Connected" : "Idle"}</span>
+                </span>
+                {isTranscribing && (
+                  <span className="flex items-center gap-1 text-purple-400">
+                    Elapsed: <span>{formatElapsed(elapsedSeconds)}</span>
+                  </span>
+                )}
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-semibold text-gray-400">Conversational turn aggregates</p>
-              <p className="text-xs text-gray-600 mt-1">Speak to reconstruct a collaborative semantic meeting log live.</p>
-            </div>
-          </div>
-        )}
-
-        <div className="flex flex-col min-h-full">
-          <div className="flex-1" />
-          <AnimatePresence initial={false} mode="popLayout">
-            {blocks.map((block) => {
-              const isLive = block.status === "live";
-              const isOwner = block.editableBy.includes(currentUserName || "");
-              const isEditing = editingBlockId === block.id;
-
-              return (
-                <motion.div
-                  key={block.id}
-                  layoutId={`block-${block.id}`}
-                  initial={{ opacity: 0, y: 20, scale: 0.98 }}
-                  animate={{ 
-                    opacity: isLive ? 0.9 : 1, 
-                    y: 0, 
-                    scale: 1,
-                    transition: { type: "spring", stiffness: 350, damping: 25 }
-                  }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className={`group relative p-5 rounded-2xl border transition-all duration-300 shadow-md ${
-                    isLive
-                      ? "bg-indigo-500/[0.02] border-indigo-500/25 shadow-lg shadow-indigo-500/[0.02]"
-                      : "bg-white/[0.02] border-white/[0.05] hover:bg-white/[0.03]"
-                  }`}
+            
+            {/* Actions Bar */}
+            {!isSuperAdmin && candidateBlocks.length > 0 && !isEditing && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleStartOverallEdit}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500 hover:text-white transition-all text-[11px] font-bold uppercase cursor-pointer"
+                  title="Edit accumulated transcript content"
                 >
-                  {/* Card Metadata / Header */}
-                  <div className="flex items-center gap-2 mb-3">
-                    <div
-                      className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-bold bg-gradient-to-br ${getUserColor(block.speakerName)} text-white flex-shrink-0 shadow-sm`}
-                    >
-                      {block.speakerName.charAt(0).toUpperCase()}
-                    </div>
-                    <span className={`text-xs font-bold tracking-wide ${getTextColor(block.speakerName)}`}>
-                      {block.speakerName}
-                    </span>
-                    <span className="text-[10px] text-gray-600 font-mono font-medium">
-                      {formatTime(block.createdAt)}
-                    </span>
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                  Edit Transcript
+                </button>
+                {onClearTranscript && (
+                  <button
+                    onClick={onClearTranscript}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500 hover:text-white transition-all text-[11px] font-bold uppercase cursor-pointer"
+                    title="Clear transcript content"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1H9a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    Clear Box
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
 
-                    {/* Status Badges */}
-                    {isLive && (
-                      <span className="ml-2 flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[9px] text-indigo-400 font-semibold animate-pulse">
-                        <span className="w-1 h-1 rounded-full bg-indigo-400 animate-ping" />
-                        Speaking
-                      </span>
-                    )}
-
-                    {!isLive && block.status === "final" && (
-                      <span className="ml-2 px-1.5 py-0.5 rounded-md bg-white/[0.02] border border-white/[0.04] text-[8px] text-gray-500 font-medium">
-                        Synced
-                      </span>
-                    )}
-
-                    {/* Manual Edit Button Overlay */}
-                    {!isLive && isOwner && !isEditing && (
-                      <button
-                        onClick={() => handleStartEdit(block.id, block.content)}
-                        className="ml-auto p-1.5 rounded-lg bg-white/[0.02] border border-white/[0.04] hover:bg-indigo-500/10 hover:border-indigo-500/20 hover:text-indigo-400 text-gray-600 opacity-0 group-hover:opacity-100 transition-all duration-200"
-                        title="Edit transcript card"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                        </svg>
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Card Content (Aggregated segments) */}
-                  <div className="text-[13px] leading-relaxed text-gray-200 font-medium tracking-wide">
-                    {isEditing ? (
-                      <div className="space-y-3 mt-1">
-                        <textarea
-                          value={editContent}
-                          onChange={(e) => setEditContent(e.target.value)}
-                          className="w-full min-h-[80px] bg-[#0c0c12] border border-white/[0.08] rounded-xl p-3 text-[13px] text-gray-200 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 transition-all font-medium"
-                          placeholder="Correct spoken content..."
-                          autoFocus
-                        />
-                        <div className="flex gap-2 justify-end">
-                          <button
-                            onClick={handleCancelEdit}
-                            className="px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] text-xs text-gray-400 transition-colors font-semibold"
+          {/* Box Body */}
+          <div className="flex-1 p-5 min-h-0 overflow-hidden flex flex-col bg-[#07070a]/40">
+            {isEditing ? (
+              <div className="flex flex-col h-full space-y-3">
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  className="flex-1 w-full bg-[#09090d] border border-emerald-500/30 rounded-2xl p-4 text-sm text-gray-200 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20 transition-all font-medium leading-relaxed resize-none shadow-inner"
+                  placeholder="Edit candidate transcript..."
+                  autoFocus
+                />
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setIsEditing(false)}
+                    className="px-4 py-2 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] text-xs text-gray-400 font-semibold cursor-pointer transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveOverallEdit}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-xs font-semibold cursor-pointer shadow-md shadow-emerald-500/10 hover:shadow-emerald-500/20 transition-all"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </div>
+            ) : candidateBlocks.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-center p-6 space-y-4 select-none">
+                <div className="w-16 h-16 rounded-2xl bg-white/[0.02] border border-white/[0.04] flex items-center justify-center text-emerald-500/40 relative">
+                  <div className="absolute inset-0 bg-emerald-500 rounded-2xl blur-[15px] opacity-10 animate-pulse" />
+                  <svg className="w-8 h-8 relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-400">Awaiting Candidate Speech...</p>
+                  <p className="text-xs text-gray-600 mt-1 max-w-[240px] mx-auto leading-relaxed">Spoken sentences will flow here in real time into a single collaborative document.</p>
+                </div>
+              </div>
+            ) : (
+              <div 
+                ref={candidateScrollRef}
+                className="flex-1 overflow-y-auto bg-[#08080c]/60 border border-white/[0.03] rounded-2xl p-6 shadow-inner leading-relaxed text-gray-300 font-medium font-sans text-sm tracking-wide scrollbar-thin scrollbar-thumb-white/5 scrollbar-track-transparent"
+              >
+                <div className="flex flex-col min-h-full">
+                  <div className="flex-1" />
+                  <div>
+                    <AnimatePresence initial={false} mode="popLayout">
+                      {candidateBlocks.map((block) => {
+                        const isLive = block.status === "live";
+                        return (
+                          <span
+                            key={block.id}
+                            className={`inline transition-all duration-200 mr-1.5 ${
+                              isLive 
+                                ? "text-emerald-300 font-semibold text-emerald-200/95 animate-pulse" 
+                                : "text-gray-300 hover:text-white"
+                            }`}
                           >
-                            Cancel
-                          </button>
-                          <button
-                            onClick={() => handleSaveEdit(block.id)}
-                            className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-xs font-semibold hover:shadow-md hover:shadow-indigo-500/10 transition-all"
-                          >
-                            Save Correction
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <p className="pl-8 whitespace-pre-wrap">
-                        {block.segments && block.segments.length > 0 ? (
-                          block.segments.map((seg, sIdx) => {
-                            const isLowConfidence = !isLive && seg.isFinal && seg.confidence !== undefined && seg.confidence < 0.75;
-                            
-                            return (
-                              <span key={sIdx} className="inline mr-1">
-                                {seg.isFinal ? (
-                                  <span
-                                    className={
-                                      isLowConfidence 
-                                        ? "border-b border-dashed border-amber-500/70 text-amber-200/90 font-medium" 
-                                        : ""
-                                    }
-                                    title={isLowConfidence ? `Confidence: ${Math.round(seg.confidence! * 100)}%` : undefined}
-                                  >
-                                    {seg.text}
+                            {block.segments && block.segments.length > 0 ? (
+                              block.segments.map((seg, sIdx) => {
+                                const isLowConfidence = !isLive && seg.isFinal && seg.confidence !== undefined && seg.confidence < 0.75;
+                                return (
+                                  <span key={sIdx} className="inline mr-1">
+                                    {seg.isFinal ? (
+                                      <span
+                                        className={isLowConfidence ? "border-b border-dashed border-amber-500/70 text-amber-200" : ""}
+                                        title={isLowConfidence ? `Confidence: ${Math.round(seg.confidence! * 100)}%` : undefined}
+                                      >
+                                        {seg.text}
+                                      </span>
+                                    ) : (
+                                      <span className="text-emerald-400/70 italic font-normal">
+                                        {seg.text}
+                                        <span className="inline-block ml-1 w-1.5 h-3.5 bg-emerald-500 rounded-sm align-middle shadow-[0_0_8px_rgba(16,185,129,0.8)] animate-pulse" />
+                                      </span>
+                                    )}
                                   </span>
-                                ) : (
-                                  <span className="text-gray-400 italic font-normal">
-                                    {seg.text}
-                                    <motion.span
-                                      animate={{ opacity: [1, 0.2, 1] }}
-                                      transition={{ duration: 0.8, repeat: Infinity }}
-                                      className="inline-block ml-1 w-1.5 h-3.5 bg-indigo-500 rounded-sm align-middle shadow-[0_0_8px_rgba(99,102,241,0.5)]"
-                                    />
-                                  </span>
-                                )}
-                              </span>
-                            );
-                          })
-                        ) : (
-                          block.content
-                        )}
-                      </p>
-                    )}
+                                );
+                              })
+                            ) : (
+                              block.content
+                            )}
+                          </span>
+                        );
+                      })}
+                    </AnimatePresence>
                   </div>
-                </motion.div>
-              );
-            })}
-          </AnimatePresence>
-          <div className="h-6 w-full flex-shrink-0" />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Box Footer Stats */}
+          {candidateBlocks.length > 0 && (
+            <div className="px-5 py-3.5 border-t border-white/[0.04] bg-[#0c0c12]/20 flex items-center justify-between text-[10px] text-gray-500 font-bold uppercase tracking-wider font-mono">
+              <span>Words logged: {getWordCount(candidateBlocks)}</span>
+              <span>Total Turns committed: {candidateBlocks.filter(b => b.status === "final").length}</span>
+            </div>
+          )}
+
         </div>
       </div>
     </div>
   );
 }
-

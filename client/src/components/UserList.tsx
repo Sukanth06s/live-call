@@ -58,6 +58,15 @@ export default function UserList({ users, currentUserId }: UserListProps) {
                 {user.id === currentUserId && (
                   <span className="ml-1.5 text-[10px] font-semibold text-blue-400 uppercase">(You)</span>
                 )}
+                <span className={`ml-2 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider font-bold border ${
+                  user.role === "hr" 
+                    ? "bg-purple-500/10 text-purple-400 border-purple-500/20" 
+                    : user.role === "candidate"
+                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                    : "bg-orange-500/10 text-orange-400 border-orange-500/20"
+                }`}>
+                  {user.role}
+                </span>
               </p>
               <p className="text-[10px] text-gray-500">
                 {user.isSpeaking && !user.isMuted ? (
