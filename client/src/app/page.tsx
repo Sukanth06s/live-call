@@ -143,7 +143,7 @@ export default function Home() {
         sessionStorage.setItem("intendedRole", role);
         setUserRole(role);
 
-        joinRoom(newRoomId, newUserName, role);
+        await joinRoom(newRoomId, newUserName, role);
 
         const tokenRole = role === "super_admin" ? "audience" : "broadcaster";
 

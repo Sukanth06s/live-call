@@ -100,16 +100,39 @@ export function useSocket(sessionToken?: string) {
     };
   }, [sessionToken]);
 
-  const joinRoom = useCallback((roomId: string, userName: string, role?: string) => {
-    if (socketRef.current) {
-      roomIdRef.current = roomId;
-      userNameRef.current = userName;
-      if (role) {
-        roleRef.current = role;
+  const joinRoom = useCallback((roomId: string, userName: string, role?: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (socketRef.current) {
+        roomIdRef.current = roomId;
+        userNameRef.current = userName;
+        if (role) {
+          roleRef.current = role;
+        }
+
+        const onRoomState = () => {
+          socketRef.current?.off("room-state", onRoomState);
+          socketRef.current?.off("join-error", onJoinError);
+          resolve();
+        };
+
+        const onJoinError = (msg: string) => {
+          socketRef.current?.off("room-state", onRoomState);
+          socketRef.current?.off("join-error", onJoinError);
+          roomIdRef.current = null;
+          userNameRef.current = null;
+          setCurrentRoomId(null);
+          reject(new Error(msg));
+        };
+
+        socketRef.current.once("room-state", onRoomState);
+        socketRef.current.once("join-error", onJoinError);
+
+        socketRef.current.emit("join-room", { roomId, userName, role: roleRef.current });
+        setCurrentRoomId(roomId);
+      } else {
+        reject(new Error("Socket not connected"));
       }
-      socketRef.current.emit("join-room", { roomId, userName, role: roleRef.current });
-      setCurrentRoomId(roomId);
-    }
+    });
   }, []);
 
   const leaveRoom = useCallback(() => {
