@@ -202,7 +202,7 @@ export default function Home() {
       roomIdRef.current = "";
       await leaveChannel();
       socketLeaveRoom();
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: "local" });
       router.replace("/login");
     };
 
