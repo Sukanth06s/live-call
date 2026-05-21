@@ -19,9 +19,6 @@ interface TranscriptPanelProps {
 
 export default function TranscriptPanel({
   blocks,
-  currentUserName,
-  roomId,
-  onEditBlock,
   onClearTranscript,
   onReplaceTranscript,
   isTranscribing = false,
@@ -43,7 +40,7 @@ export default function TranscriptPanel({
         setElapsedSeconds((prev) => prev + 1);
       }, 1000);
     } else {
-      setElapsedSeconds(0);
+      timer = setTimeout(() => setElapsedSeconds(0), 0);
     }
     return () => clearInterval(timer);
   }, [isTranscribing]);
@@ -94,7 +91,7 @@ export default function TranscriptPanel({
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#07070a] select-none">
+    <div className="flex min-h-0 flex-1 flex-col bg-[#07070a] select-none">
       {/* GLOBAL HEADER */}
       <div className="flex items-center gap-3 px-6 py-4 border-b border-white/[0.06] bg-[#0b0b10]/40 backdrop-blur-md">
         <div className="relative flex items-center justify-center w-2 h-2">

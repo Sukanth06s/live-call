@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { RoomUser, TranscriptBlock } from "@/types";
+import { ActiveTranscriptionSession, RoomUser, TranscriptBlock } from "@/types";
 
 let SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
 if (SOCKET_URL && !SOCKET_URL.startsWith("http://") && !SOCKET_URL.startsWith("https://")) {
@@ -15,15 +15,28 @@ export function useSocket(sessionToken?: string) {
   const roomIdRef = useRef<string | null>(null);
   const userNameRef = useRef<string | null>(null);
   const roleRef = useRef<string>(typeof window !== "undefined" ? sessionStorage.getItem("intendedRole") || "candidate" : "candidate");
+  const sessionTokenRef = useRef<string | undefined>(undefined);
   const [socketId, setSocketId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [users, setUsers] = useState<RoomUser[]>([]);
   const [blocks, setBlocks] = useState<TranscriptBlock[]>([]);
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
-  const [activeTranscriptionSession, setActiveTranscriptionSession] = useState<any>(null);
+  const [activeTranscriptionSession, setActiveTranscriptionSession] = useState<ActiveTranscriptionSession | null>(null);
 
   useEffect(() => {
     if (!sessionToken) return;
+    if (sessionTokenRef.current !== sessionToken) {
+      sessionTokenRef.current = sessionToken;
+      roomIdRef.current = null;
+      userNameRef.current = null;
+      roleRef.current = "candidate";
+      setSocketId(null);
+      setIsConnected(false);
+      setUsers([]);
+      setBlocks([]);
+      setCurrentRoomId(null);
+      setActiveTranscriptionSession(null);
+    }
 
     const socket = io(SOCKET_URL, {
       transports: ["websocket"],
@@ -31,7 +44,6 @@ export function useSocket(sessionToken?: string) {
       withCredentials: true,
       auth: { 
         token: sessionToken,
-        role: typeof window !== "undefined" ? sessionStorage.getItem("intendedRole") || "candidate" : "candidate"
       },
     });
 
@@ -97,6 +109,9 @@ export function useSocket(sessionToken?: string) {
 
     return () => {
       socket.disconnect();
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
     };
   }, [sessionToken]);
 
@@ -153,6 +168,12 @@ export function useSocket(sessionToken?: string) {
     }
   }, []);
 
+  const emitVideoToggle = useCallback((roomId: string, isVideoEnabled: boolean) => {
+    if (socketRef.current) {
+      socketRef.current.emit("toggle-video", { roomId, isVideoEnabled });
+    }
+  }, []);
+
   const emitSpeaking = useCallback((roomId: string, isSpeaking: boolean) => {
     if (socketRef.current) {
       socketRef.current.emit("speaking", { roomId, isSpeaking });
@@ -176,6 +197,7 @@ export function useSocket(sessionToken?: string) {
     joinRoom,
     leaveRoom,
     emitMuteToggle,
+    emitVideoToggle,
     emitSpeaking,
     emitTranscriptEdit,
     emitClearTranscript: useCallback(() => {
@@ -200,4 +222,3 @@ export function useSocket(sessionToken?: string) {
     }, []),
   };
 }
-

@@ -30,6 +30,12 @@ function createRoom(roomId) {
 
 function joinRoom(roomId, userId, userName, authUserId, role) {
   const room = createRoom(roomId);
+  const existingUser =
+    role === "candidate"
+      ? room.candidateUser
+      : role === "hr"
+      ? room.hrUser
+      : Array.from(room.hiddenObservers.values()).find((observer) => observer.authUserId === authUserId);
   
   const user = {
     id: userId,
@@ -37,9 +43,10 @@ function joinRoom(roomId, userId, userName, authUserId, role) {
     name: userName,
     role,
     roomId,
-    isMuted: false,
-    isSpeaking: false,
-    joinedAt: Date.now(),
+    isMuted: existingUser?.isMuted ?? false,
+    isVideoEnabled: existingUser?.isVideoEnabled ?? true,
+    isSpeaking: existingUser?.isSpeaking ?? false,
+    joinedAt: existingUser?.joinedAt ?? Date.now(),
   };
 
   if (role === "candidate") {
@@ -47,6 +54,9 @@ function joinRoom(roomId, userId, userName, authUserId, role) {
   } else if (role === "hr") {
     room.hrUser = user;
   } else if (role === "super_admin") {
+    if (existingUser?.id && existingUser.id !== userId) {
+      room.hiddenObservers.delete(existingUser.id);
+    }
     room.hiddenObservers.set(userId, user);
   }
   
@@ -135,6 +145,18 @@ function toggleMute(roomId, userId, isMuted) {
   }
   return false;
 }
+
+function toggleVideo(roomId, userId, isVideoEnabled) {
+  const room = rooms.get(roomId);
+  if (room) {
+    if (room.candidateUser?.id === userId) room.candidateUser.isVideoEnabled = isVideoEnabled;
+    else if (room.hrUser?.id === userId) room.hrUser.isVideoEnabled = isVideoEnabled;
+    else if (room.hiddenObservers.has(userId)) room.hiddenObservers.get(userId).isVideoEnabled = isVideoEnabled;
+    return true;
+  }
+  return false;
+}
+
 
 function setSpeaking(roomId, userId, isSpeaking) {
   const room = rooms.get(roomId);
@@ -231,6 +253,7 @@ module.exports = {
   getProjectedRoomState,
   getRoomSocketsByRole,
   toggleMute,
+  toggleVideo,
   setSpeaking,
   addBlock,
   updateBlockContent,
@@ -239,4 +262,3 @@ module.exports = {
   findUserRoom,
   deleteRoom,
 };
-

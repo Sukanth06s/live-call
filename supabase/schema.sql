@@ -1,5 +1,17 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+CREATE TABLE profiles (
+  user_id UUID PRIMARY KEY,
+  role TEXT NOT NULL DEFAULT 'candidate'
+    CHECK (role IN ('candidate', 'hr', 'super_admin')),
+  display_name TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+GRANT USAGE ON SCHEMA public TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE profiles TO service_role;
+
 CREATE TABLE interviews (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 

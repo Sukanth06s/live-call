@@ -6,7 +6,13 @@ import UserList from "./UserList";
 import TranscriptPanel from "./TranscriptPanel";
 import MuteButton from "./MuteButton";
 import ConnectionStatus from "./ConnectionStatus";
+import VideoPlayer, { VideoTrackLike } from "./VideoPlayer";
 import { RoomUser, TranscriptBlock } from "@/types";
+
+interface AgoraRemoteUserLike {
+  uid?: string | number;
+  videoTrack?: VideoTrackLike;
+}
 
 interface RoomPageProps {
   roomId: string;
@@ -15,11 +21,15 @@ interface RoomPageProps {
   blocks: TranscriptBlock[];
   currentUserId: string | null;
   userRole?: string;
+  localCameraTrack?: VideoTrackLike | null;
+  remoteUsers?: AgoraRemoteUserLike[];
   isMuted: boolean;
+  isVideoEnabled: boolean;
   isConnected: boolean;
   isAgoraJoined: boolean;
   isTranscribing: boolean;
   onToggleMute: () => void;
+  onToggleVideo: () => void;
   onLeaveRoom: () => void;
   onEditBlock: (blockId: string, content: string) => void;
   onClearTranscript: () => void;
@@ -35,11 +45,15 @@ export default function RoomPage({
   blocks,
   currentUserId,
   userRole,
+  localCameraTrack,
+  remoteUsers = [],
   isMuted,
+  isVideoEnabled,
   isConnected,
   isAgoraJoined,
   isTranscribing,
   onToggleMute,
+  onToggleVideo,
   onLeaveRoom,
   onEditBlock,
   onClearTranscript,
@@ -54,6 +68,18 @@ export default function RoomPage({
   const currentUser = users.find(u => u.id === currentUserId);
   const resolvedRole = userRole || currentUser?.role || "candidate";
   const isHr = resolvedRole === "hr";
+  const isSuperAdmin = resolvedRole === "super_admin";
+  const visibleRemoteRoomUsers = users.filter((u) => {
+    if (u.id === currentUserId) return false;
+    return u.role === "candidate" || u.role === "hr";
+  });
+  const shouldShowLocalVideo = !isSuperAdmin;
+  const shouldShowVideoStrip = shouldShowLocalVideo || remoteUsers.length > 0 || visibleRemoteRoomUsers.length > 0;
+  const remoteVideoTracksBySocketId = new Map(
+    remoteUsers
+      .filter((remoteUser) => remoteUser.videoTrack)
+      .map((remoteUser) => [String(remoteUser.uid), remoteUser.videoTrack as VideoTrackLike])
+  );
 
   return (
     <div className="h-screen bg-[#07070a] flex relative overflow-hidden">
@@ -154,7 +180,29 @@ export default function RoomPage({
                 </p>
               </div>
             ) : (
-              <MuteButton isMuted={isMuted} onToggle={onToggleMute} />
+              <div className="grid grid-cols-2 gap-2">
+                <MuteButton isMuted={isMuted} onToggle={onToggleMute} />
+                <motion.button
+                  onClick={onToggleVideo}
+                  whileTap={{ scale: 0.93 }}
+                  className={`relative flex items-center justify-center gap-2.5 rounded-2xl border py-3.5 text-sm font-semibold tracking-wide transition-all duration-300 ${
+                    isVideoEnabled
+                      ? "border-sky-500/20 bg-sky-500/15 text-sky-400 hover:bg-sky-500/25"
+                      : "border-amber-500/20 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25"
+                  }`}
+                >
+                  {isVideoEnabled ? (
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  ) : (
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2zM3 3l18 18" />
+                    </svg>
+                  )}
+                  <span>{isVideoEnabled ? "Camera" : "Camera Off"}</span>
+                </motion.button>
+              </div>
             )}
 
             {isHr ? (
@@ -225,6 +273,35 @@ export default function RoomPage({
         transition={{ delay: 0.15 }}
         className="flex-1 flex flex-col min-w-0 h-full overflow-hidden"
       >
+        {shouldShowVideoStrip && (
+          <div className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/40 px-6 py-4 backdrop-blur-md">
+            <div className="flex h-[clamp(170px,27vh,280px)] items-stretch gap-4 overflow-x-auto pb-1">
+              {shouldShowLocalVideo && (
+                <VideoPlayer
+                  track={localCameraTrack}
+                  isVideoEnabled={isVideoEnabled}
+                  userName={userName}
+                  role={resolvedRole}
+                  isSpeaking={currentUser?.isSpeaking}
+                  isLocal
+                />
+              )}
+              {visibleRemoteRoomUsers.map((roomUser) => {
+                const track = roomUser.isVideoEnabled ? remoteVideoTracksBySocketId.get(roomUser.id) : null;
+                return (
+                  <VideoPlayer
+                    key={roomUser.id}
+                    track={track}
+                    isVideoEnabled={roomUser.isVideoEnabled}
+                    userName={roomUser.name}
+                    role={roomUser.role}
+                    isSpeaking={roomUser.isSpeaking}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        )}
         <TranscriptPanel
           blocks={blocks}
           currentUserName={userName}
@@ -234,11 +311,10 @@ export default function RoomPage({
           onReplaceTranscript={onReplaceTranscript}
           isTranscribing={isTranscribing}
           isHr={isHr}
-          isSuperAdmin={resolvedRole === "super_admin"}
+          isSuperAdmin={isSuperAdmin}
           onStopTranscription={onStopTranscription}
         />
       </motion.main>
     </div>
   );
 }
-

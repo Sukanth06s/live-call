@@ -3,7 +3,10 @@
 import { useRef, useCallback, useState } from "react";
 
 interface UseDeepgramOptions {
-  socket: any;
+  socket: {
+    connected: boolean;
+    emit: (event: string, payload: unknown) => void;
+  } | null;
   roomId: string;
   userName: string;
 }
@@ -137,7 +140,7 @@ export function useDeepgram({ socket, roomId, userName }: UseDeepgramOptions) {
     } catch (err) {
       console.error("[Deepgram Proxy] Failed to start/rebuild AudioWorklet graph:", err);
     }
-  }, [socket, roomId, stopTranscription]);
+  }, [socket, roomId, userName, stopTranscription]);
 
   return {
     startTranscription,
@@ -145,5 +148,4 @@ export function useDeepgram({ socket, roomId, userName }: UseDeepgramOptions) {
     isTranscribing,
   };
 }
-
 

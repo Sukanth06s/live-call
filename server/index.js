@@ -24,6 +24,7 @@ const {
   getProjectedRoomState,
   getRoomSocketsByRole,
   toggleMute,
+  toggleVideo,
   setSpeaking,
   addBlock,
   updateBlockContent,
@@ -54,6 +55,37 @@ app.use(express.json());
 
 const speakerTimeouts = new Map();
 const activeDeepgramConnections = new Map(); // roomId -> { dgConnection, isDeepgramConnecting, isDgOpen, audioQueue }
+const allowedRoles = new Set(["candidate", "hr", "super_admin"]);
+
+async function getAuthenticatedUserFromToken(token) {
+  const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !user) {
+    throw error || new Error("Invalid session");
+  }
+  return user;
+}
+
+async function getAuthorizedRole(userId) {
+  const { data, error } = await supabaseAdmin
+    .from("profiles")
+    .select("role")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[Auth] Failed to fetch user role:", error);
+    throw new Error("Unable to verify user role");
+  }
+
+  const role = data?.role || "candidate";
+  return allowedRoles.has(role) ? role : "candidate";
+}
+
+function getBearerToken(req) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  return authHeader.split(" ")[1];
+}
 
 // Helper to broadcast projected room state based on roles
 const broadcastProjectedRoomState = (roomId) => {
@@ -80,22 +112,18 @@ const broadcastProjectedRoomState = (roomId) => {
 // Socket Auth Middleware
 io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token;
-  const intendedRole = socket.handshake.auth?.role || "candidate"; 
 
   if (!token) {
     return next(new Error("Authentication error: Token missing"));
   }
   
   try {
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
-    
-    if (error || !user) {
-      throw error || new Error("Invalid session");
-    }
+    const user = await getAuthenticatedUserFromToken(token);
+    const authorizedRole = await getAuthorizedRole(user.id);
 
     socket.data.userId = user.id; 
     socket.data.email = user.email;
-    socket.data.role = intendedRole; // In a production app, fetch from DB
+    socket.data.role = authorizedRole;
     socket.data.authenticated = true;
     next();
   } catch (err) {
@@ -108,28 +136,51 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", message: "Live Room Server Running" });
 });
 
-app.get("/api/token", (req, res) => {
+app.get("/api/me", async (req, res) => {
+  const token = getBearerToken(req);
+  if (!token) return res.status(401).json({ error: "No token provided" });
+
+  try {
+    const user = await getAuthenticatedUserFromToken(token);
+    const role = await getAuthorizedRole(user.id);
+    res.json({ user: { id: user.id, email: user.email, role } });
+  } catch (err) {
+    res.status(401).json({ error: "Invalid token" });
+  }
+});
+
+app.get("/api/token", async (req, res) => {
   const channelName = req.query.channelName;
-  const role = req.query.role; // "broadcaster" or "audience"
   if (!channelName) return res.status(400).json({ error: "channelName is required" });
+  const uid = String(req.query.uid || "0");
+  const token = getBearerToken(req);
+  if (!token) return res.status(401).json({ error: "No token provided" });
+
+  let authorizedRole;
+  try {
+    const user = await getAuthenticatedUserFromToken(token);
+    authorizedRole = await getAuthorizedRole(user.id);
+  } catch (err) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
 
   const appId = process.env.AGORA_APP_ID;
   const appCertificate = process.env.AGORA_APP_CERTIFICATE;
   
-  const rtcRole = role === "audience" ? RtcRole.SUBSCRIBER : RtcRole.PUBLISHER;
-  const token = RtcTokenBuilder.buildTokenWithUid(appId, appCertificate, channelName, 0, rtcRole, Math.floor(Date.now() / 1000) + 3600);
+  const rtcRole = authorizedRole === "super_admin" ? RtcRole.SUBSCRIBER : RtcRole.PUBLISHER;
+  const agoraToken = RtcTokenBuilder.buildTokenWithAccount(appId, appCertificate, channelName, uid, rtcRole, Math.floor(Date.now() / 1000) + 3600);
   
-  return res.json({ token });
+  return res.json({ token: agoraToken, uid });
 });
 
 app.get("/api/rooms", async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: "No token provided" });
-  const token = authHeader.split(" ")[1];
+  const token = getBearerToken(req);
+  if (!token) return res.status(401).json({ error: "No token provided" });
   try {
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
-    if (error || !user) {
-      return res.status(401).json({ error: "Invalid token" });
+    const user = await getAuthenticatedUserFromToken(token);
+    const role = await getAuthorizedRole(user.id);
+    if (role !== "super_admin") {
+      return res.status(403).json({ error: "Super Admin access required" });
     }
     const { getAllRooms } = require("./rooms");
     res.json({ rooms: getAllRooms() });
@@ -142,29 +193,62 @@ io.on("connection", (socket) => {
   console.log(`[Socket] Authorized: ${socket.id} as ${socket.data.role}`);
 
   socket.on("join-room", ({ roomId, userName, role }) => {
+    const requestedRole = socket.data.role || "candidate";
+    if (role && role !== requestedRole) {
+      socket.emit("join-error", `Your account is authorized as ${requestedRole}, not ${role}.`);
+      return;
+    }
     const room = getRoom(roomId);
     if (room) {
-      if (role === "candidate" && room.candidateUser) {
+      if (
+        requestedRole === "candidate" &&
+        room.candidateUser &&
+        room.candidateUser.authUserId !== socket.data.userId
+      ) {
         socket.emit("join-error", "This room is already full: A Candidate has already joined this session.");
         return;
       }
-      if (role === "hr" && room.hrUser) {
+      if (
+        requestedRole === "hr" &&
+        room.hrUser &&
+        room.hrUser.authUserId !== socket.data.userId
+      ) {
         socket.emit("join-error", "This room is already full: An HR Interviewer has already joined this session.");
         return;
       }
-      if (role === "super_admin" && room.hiddenObservers.size > 0) {
-        socket.emit("join-error", "This room is already full: A Super Admin Observer has already joined this session.");
-        return;
+      if (requestedRole === "super_admin" && room.hiddenObservers.size > 0) {
+        const existingObserver = Array.from(room.hiddenObservers.values()).find(
+          (observer) => observer.authUserId === socket.data.userId
+        );
+        if (!existingObserver) {
+          socket.emit("join-error", "This room is already full: A Super Admin Observer has already joined this session.");
+          return;
+        }
+      }
+    }
+
+    if (room) {
+      const existingSocketId =
+        requestedRole === "candidate"
+          ? room.candidateUser?.id
+          : requestedRole === "hr"
+          ? room.hrUser?.id
+          : Array.from(room.hiddenObservers.values()).find((observer) => observer.authUserId === socket.data.userId)?.id;
+
+      if (existingSocketId && existingSocketId !== socket.id) {
+        const existingSocket = io.sockets.sockets.get(existingSocketId);
+        if (existingSocket) {
+          existingSocket.leave(roomId);
+          existingSocket.data.roomId = null;
+        }
       }
     }
 
     socket.data.userName = userName;
     socket.data.roomId = roomId;
-    if (role) {
-      socket.data.role = role;
-    }
+    socket.data.role = requestedRole;
     
-    joinRoom(roomId, socket.id, userName, socket.data.userId, socket.data.role);
+    joinRoom(roomId, socket.id, userName, socket.data.userId, requestedRole);
     socket.join(roomId);
     
     broadcastProjectedRoomState(roomId);
@@ -441,6 +525,12 @@ io.on("connection", (socket) => {
     toggleMute(roomId, socket.id, isMuted);
     broadcastProjectedRoomState(roomId);
   });
+
+  socket.on("toggle-video", ({ roomId, isVideoEnabled }) => {
+    toggleVideo(roomId, socket.id, isVideoEnabled);
+    broadcastProjectedRoomState(roomId);
+  });
+
 
   socket.on("transcript-edit", ({ roomId, blockId, content }) => {
     updateBlockContent(roomId, blockId, content);

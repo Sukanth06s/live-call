@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 interface LobbyProps {
   onJoinRoom: (roomId: string, userName: string, role: string, token?: string) => void;
   isConnected: boolean;
+  authorizedRole: string;
   defaultName?: string;
   joinError?: string | null;
   onClearError?: () => void;
@@ -22,6 +23,7 @@ interface ActiveRoom {
 export default function Lobby({ 
   onJoinRoom, 
   isConnected, 
+  authorizedRole,
   defaultName,
   joinError,
   onClearError,
@@ -29,8 +31,7 @@ export default function Lobby({
 }: LobbyProps) {
   const [roomId, setRoomId] = useState("");
   const [userName, setUserName] = useState(defaultName || "");
-  const [role, setRole] = useState(typeof window !== "undefined" ? sessionStorage.getItem("intendedRole") || "candidate" : "candidate");
-  const [token, setToken] = useState("");
+  const [token] = useState("");
   const [mode, setMode] = useState<"join" | "create">("join");
   
   // Super Admin active rooms dashboard state
@@ -40,7 +41,7 @@ export default function Lobby({
 
   // Fetch active rooms for Super Admin
   const fetchActiveRooms = useCallback(async () => {
-    if (role !== "super_admin" || !accessToken) return;
+    if (authorizedRole !== "super_admin" || !accessToken) return;
     try {
       setRoomError(null);
       let socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
@@ -55,30 +56,38 @@ export default function Lobby({
       if (!res.ok) throw new Error("Failed to load active rooms");
       const data = await res.json();
       setActiveRooms(data.rooms || []);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[Lobby] Error fetching rooms:", err);
-      setRoomError(err.message || String(err));
+      setRoomError(err instanceof Error ? err.message : String(err));
     }
-  }, [role, accessToken]);
+  }, [authorizedRole, accessToken]);
 
   // Load rooms on mount & when role becomes super_admin
   useEffect(() => {
-    if (role === "super_admin" && accessToken) {
-      setLoadingRooms(true);
-      fetchActiveRooms().finally(() => setLoadingRooms(false));
+    if (authorizedRole === "super_admin" && accessToken) {
+      let isCancelled = false;
+      const loadRooms = async () => {
+        setLoadingRooms(true);
+        await fetchActiveRooms();
+        if (!isCancelled) setLoadingRooms(false);
+      };
+      void loadRooms();
 
       // Continuous 3s Polling for real-time dashboard feel
       const interval = setInterval(fetchActiveRooms, 3000);
-      return () => clearInterval(interval);
+      return () => {
+        isCancelled = true;
+        clearInterval(interval);
+      };
     }
-  }, [role, accessToken, fetchActiveRooms]);
+  }, [authorizedRole, accessToken, fetchActiveRooms]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!userName.trim()) return;
 
     // Super Admin must click an active room square to join
-    if (role === "super_admin") return;
+    if (authorizedRole === "super_admin") return;
 
     const finalRoomId =
       mode === "create"
@@ -87,8 +96,8 @@ export default function Lobby({
 
     if (!finalRoomId) return;
     
-    sessionStorage.setItem("intendedRole", role);
-    onJoinRoom(finalRoomId, userName.trim(), role, token.trim() || undefined);
+    sessionStorage.setItem("intendedRole", authorizedRole);
+    onJoinRoom(finalRoomId, userName.trim(), authorizedRole, token.trim() || undefined);
   };
 
   const handleJoinActiveRoom = (targetRoomId: string) => {
@@ -175,36 +184,27 @@ export default function Lobby({
               />
             </div>
 
-            {/* Premium Interactive Role Selector Tabs */}
+            {/* Server-authorized role */}
             <div>
               <label className="block text-[11px] font-bold text-gray-500 mb-2 uppercase tracking-wider select-none">
-                Your Role
+                Account Role
               </label>
-              <div className="grid grid-cols-3 gap-2 bg-white/[0.03] border border-white/[0.06] p-1.5 rounded-xl">
-                {[
-                  { id: "candidate", label: "Candidate", grad: "from-blue-500 to-cyan-500", glow: "shadow-blue-500/10" },
-                  { id: "hr", label: "HR / Interviewer", grad: "from-purple-500 to-indigo-500", glow: "shadow-purple-500/10" },
-                  { id: "super_admin", label: "Super Admin", grad: "from-orange-500 to-rose-600", glow: "shadow-orange-500/10" }
-                ].map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setRole(item.id)}
-                    className={`py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer ${
-                      role === item.id
-                        ? `bg-gradient-to-r ${item.grad} text-white shadow-md ${item.glow}`
-                        : "text-gray-500 hover:text-gray-300 hover:bg-white/[0.01]"
-                    }`}
-                  >
-                    {item.id === "super_admin" ? "Admin" : item.id === "hr" ? "HR" : "Candidate"}
-                  </button>
-                ))}
+              <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-1.5">
+                <div className={`py-2 rounded-lg text-center text-[10px] font-bold uppercase tracking-wider text-white shadow-md ${
+                  authorizedRole === "super_admin"
+                    ? "bg-gradient-to-r from-orange-500 to-rose-600 shadow-orange-500/10"
+                    : authorizedRole === "hr"
+                    ? "bg-gradient-to-r from-purple-500 to-indigo-500 shadow-purple-500/10"
+                    : "bg-gradient-to-r from-blue-500 to-cyan-500 shadow-blue-500/10"
+                }`}>
+                  {authorizedRole === "super_admin" ? "Super Admin" : authorizedRole === "hr" ? "HR / Interviewer" : "Candidate"}
+                </div>
               </div>
             </div>
 
             {/* Conditional Views based on role choice */}
             <AnimatePresence mode="wait">
-              {role === "super_admin" ? (
+              {authorizedRole === "super_admin" ? (
                 /* Super Admin Dashboard Grid */
                 <motion.div
                   key="admin-rooms"

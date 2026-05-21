@@ -7,7 +7,9 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.bufferIndex = 0;
   }
 
-  process(inputs, outputs, parameters) {
+  process(inputs, _outputs, _parameters) {
+    void _outputs;
+    void _parameters;
     const input = inputs[0];
     if (input && input.length > 0) {
       const channelData = input[0]; // Mono microphone track

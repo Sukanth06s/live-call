@@ -9,7 +9,6 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState("candidate");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -19,20 +18,17 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      sessionStorage.removeItem("intendedRole");
+      const { error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
       if (error) throw error;
 
-      // Store intended role in sessionStorage
-      // so the main page can use it for socket joining
-      sessionStorage.setItem("intendedRole", role);
-
       router.push("/");
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -128,31 +124,6 @@ export default function LoginPage() {
                   className="w-full bg-[#07070a]/50 border border-white/[0.07] rounded-xl pl-10 pr-4 py-3 text-white placeholder-gray-600 text-sm focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 transition-all font-medium"
                   placeholder="••••••••"
                 />
-              </div>
-            </div>
-
-            {/* Premium Glowing Interactive Role selector pills */}
-            <div className="space-y-1.5">
-              <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider select-none">Access Role</label>
-              <div className="grid grid-cols-3 gap-2 bg-white/[0.03] border border-white/[0.06] p-1.5 rounded-xl select-none">
-                {[
-                  { id: "candidate", label: "Candidate", grad: "from-blue-500 to-cyan-500", glow: "shadow-blue-500/10" },
-                  { id: "hr", label: "HR / Interviewer", grad: "from-purple-500 to-indigo-500", glow: "shadow-purple-500/10" },
-                  { id: "super_admin", label: "Super Admin", grad: "from-orange-500 to-rose-600", glow: "shadow-orange-500/10" }
-                ].map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setRole(item.id)}
-                    className={`py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer ${
-                      role === item.id
-                        ? `bg-gradient-to-r ${item.grad} text-white shadow-md ${item.glow}`
-                        : "text-gray-500 hover:text-gray-300 hover:bg-white/[0.01]"
-                    }`}
-                  >
-                    {item.id === "super_admin" ? "Admin" : item.id === "hr" ? "HR" : "Candidate"}
-                  </button>
-                ))}
               </div>
             </div>
 

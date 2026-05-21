@@ -11,6 +11,7 @@ export interface RoomUser {
   role: UserRole;
   roomId: string;
   isMuted: boolean;
+  isVideoEnabled: boolean;
   isSpeaking: boolean;
   joinedAt: number;
 }
@@ -51,4 +52,3 @@ export interface RoomState {
   users: RoomUser[];
   blocks: TranscriptBlock[];
 }
-
