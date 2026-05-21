@@ -56,6 +56,7 @@ app.use(express.json());
 const speakerTimeouts = new Map();
 const activeDeepgramConnections = new Map(); // roomId -> { dgConnection, isDeepgramConnecting, isDgOpen, audioQueue }
 const allowedRoles = new Set(["candidate", "hr", "super_admin"]);
+const activeUserSockets = new Map(); // Supabase auth user id -> active socket id
 
 async function getAuthenticatedUserFromToken(token) {
   const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
@@ -190,6 +191,16 @@ app.get("/api/rooms", async (req, res) => {
 });
 
 io.on("connection", (socket) => {
+  const existingSocketId = activeUserSockets.get(socket.data.userId);
+  if (existingSocketId && existingSocketId !== socket.id) {
+    const existingSocket = io.sockets.sockets.get(existingSocketId);
+    if (existingSocket) {
+      existingSocket.emit("force-logout", "This account was signed in from another device. You have been logged out here.");
+      existingSocket.disconnect(true);
+    }
+  }
+  activeUserSockets.set(socket.data.userId, socket.id);
+
   console.log(`[Socket] Authorized: ${socket.id} as ${socket.data.role}`);
 
   socket.on("join-room", ({ roomId, userName, role }) => {
@@ -203,7 +214,7 @@ io.on("connection", (socket) => {
       if (
         requestedRole === "candidate" &&
         room.candidateUser &&
-        room.candidateUser.authUserId !== socket.data.userId
+        room.candidateUser.id !== socket.id
       ) {
         socket.emit("join-error", "This room is already full: A Candidate has already joined this session.");
         return;
@@ -211,35 +222,15 @@ io.on("connection", (socket) => {
       if (
         requestedRole === "hr" &&
         room.hrUser &&
-        room.hrUser.authUserId !== socket.data.userId
+        room.hrUser.id !== socket.id
       ) {
         socket.emit("join-error", "This room is already full: An HR Interviewer has already joined this session.");
         return;
       }
       if (requestedRole === "super_admin" && room.hiddenObservers.size > 0) {
-        const existingObserver = Array.from(room.hiddenObservers.values()).find(
-          (observer) => observer.authUserId === socket.data.userId
-        );
-        if (!existingObserver) {
+        if (!room.hiddenObservers.has(socket.id)) {
           socket.emit("join-error", "This room is already full: A Super Admin Observer has already joined this session.");
           return;
-        }
-      }
-    }
-
-    if (room) {
-      const existingSocketId =
-        requestedRole === "candidate"
-          ? room.candidateUser?.id
-          : requestedRole === "hr"
-          ? room.hrUser?.id
-          : Array.from(room.hiddenObservers.values()).find((observer) => observer.authUserId === socket.data.userId)?.id;
-
-      if (existingSocketId && existingSocketId !== socket.id) {
-        const existingSocket = io.sockets.sockets.get(existingSocketId);
-        if (existingSocket) {
-          existingSocket.leave(roomId);
-          existingSocket.data.roomId = null;
         }
       }
     }
@@ -580,6 +571,10 @@ io.on("connection", (socket) => {
 });
 
 function handleLeave(socket) {
+  if (socket.data.userId && activeUserSockets.get(socket.data.userId) === socket.id) {
+    activeUserSockets.delete(socket.data.userId);
+  }
+
   const roomId = socket.data.roomId;
   const role = socket.data.role;
   if (roomId) {

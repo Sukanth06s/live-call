@@ -191,13 +191,30 @@ export default function Home() {
       socketLeaveRoom();
     };
 
+    const handleForceLogout = async (message: string) => {
+      console.warn("[Socket] Force logout received:", message);
+      sessionStorage.removeItem("intendedRole");
+      sessionStorage.setItem("authNotice", message);
+      setJoinError(message);
+      setInRoom(false);
+      setRoomId("");
+      setUserName("");
+      roomIdRef.current = "";
+      await leaveChannel();
+      socketLeaveRoom();
+      await supabase.auth.signOut();
+      router.replace("/login");
+    };
+
     socket.on("join-error", handleJoinError);
     socket.on("room-closed", handleRoomClosed);
+    socket.on("force-logout", handleForceLogout);
     return () => {
       socket.off("join-error", handleJoinError);
       socket.off("room-closed", handleRoomClosed);
+      socket.off("force-logout", handleForceLogout);
     };
-  }, [socket, leaveChannel, socketLeaveRoom]);
+  }, [router, socket, leaveChannel, socketLeaveRoom]);
 
   const handleJoinRoom = useCallback(
     async (newRoomId: string, newUserName: string, _role: string, token?: string) => {
