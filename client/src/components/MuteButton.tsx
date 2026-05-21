@@ -6,19 +6,21 @@ interface MuteButtonProps {
   isMuted: boolean;
   onToggle: () => void;
   disabled?: boolean;
+  compact?: boolean;
 }
 
-export default function MuteButton({ isMuted, onToggle, disabled }: MuteButtonProps) {
+export default function MuteButton({ isMuted, onToggle, disabled, compact = false }: MuteButtonProps) {
   return (
     <motion.button
       onClick={onToggle}
       disabled={disabled}
       whileTap={{ scale: 0.93 }}
       className={`
-        relative w-full py-3.5 rounded-2xl font-semibold text-sm tracking-wide
+        relative w-full rounded-2xl font-semibold tracking-wide
         transition-all duration-300 ease-out
         flex items-center justify-center gap-2.5
         disabled:opacity-40 disabled:cursor-not-allowed
+        ${compact ? "min-h-12 px-3 py-3 text-xs" : "py-3.5 text-sm"}
         ${isMuted
           ? "bg-red-500/15 text-red-400 border border-red-500/20 hover:bg-red-500/25 hover:border-red-500/40"
           : "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/25 hover:border-emerald-500/40"

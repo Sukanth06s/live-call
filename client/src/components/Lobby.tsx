@@ -107,7 +107,7 @@ export default function Lobby({
   };
 
   return (
-    <div className="min-h-screen bg-[#07070a] flex items-center justify-center p-4 relative overflow-hidden">
+    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-x-hidden overflow-y-auto bg-[#07070a] p-3 sm:p-4">
       {/* Background glow effects */}
       <div className="absolute top-1/4 -left-32 w-[400px] h-[400px] bg-blue-600/10 rounded-full blur-[140px]" />
       <div className="absolute bottom-1/4 -right-32 w-[400px] h-[400px] bg-purple-600/10 rounded-full blur-[140px]" />
@@ -117,24 +117,24 @@ export default function Lobby({
         initial={{ opacity: 0, y: 30, scale: 0.96 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ type: "spring", stiffness: 350, damping: 28 }}
-        className="relative w-full max-w-lg"
+        className="relative w-full max-w-lg py-6 sm:py-8"
       >
         {/* Glowing border outline wrapper */}
-        <div className="bg-[#0f0f14]/80 backdrop-blur-2xl border border-white/[0.06] hover:border-white/[0.1] rounded-3xl p-8 shadow-2xl shadow-black/60 transition-all duration-300">
+        <div className="rounded-2xl border border-white/[0.06] bg-[#0f0f14]/80 p-5 shadow-2xl shadow-black/60 backdrop-blur-2xl transition-all duration-300 hover:border-white/[0.1] sm:rounded-3xl sm:p-8">
           {/* Logo / Title */}
-          <div className="text-center mb-8">
+          <div className="mb-6 text-center sm:mb-8">
             <motion.div
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
               transition={{ type: "spring", stiffness: 450, damping: 18, delay: 0.15 }}
-              className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 mb-4 shadow-lg shadow-blue-500/25 relative"
+              className="relative mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 shadow-lg shadow-blue-500/25 sm:h-14 sm:w-14"
             >
               <div className="absolute inset-0 bg-blue-500 rounded-2xl blur-[12px] opacity-35" />
-              <svg className="w-7 h-7 text-white relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <svg className="relative z-10 h-6 w-6 text-white sm:h-7 sm:w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
               </svg>
             </motion.div>
-            <h1 className="text-2xl font-bold text-white tracking-tight bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">LiveRoom</h1>
+            <h1 className="bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-xl font-bold tracking-tight text-transparent sm:text-2xl">LiveRoom</h1>
             <p className="text-xs text-gray-400 mt-1 select-none">Voice chat with live AI transcription</p>
           </div>
 
@@ -214,7 +214,7 @@ export default function Lobby({
                   className="space-y-4 pt-1"
                 >
                   <div className="flex items-center justify-between border-b border-white/[0.04] pb-2 select-none">
-                    <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="flex min-w-0 items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-400 sm:text-[11px]">
                       <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
                       Active Ongoing Sessions ({activeRooms.length})
                     </span>
@@ -222,7 +222,7 @@ export default function Lobby({
                       type="button"
                       onClick={fetchActiveRooms}
                       disabled={loadingRooms}
-                      className="text-[10px] font-bold text-gray-500 hover:text-indigo-400 transition-colors uppercase cursor-pointer"
+                      className="shrink-0 cursor-pointer text-[10px] font-bold uppercase text-gray-500 transition-colors hover:text-indigo-400"
                     >
                       {loadingRooms ? "Refreshing..." : "Refresh"}
                     </button>
@@ -252,7 +252,7 @@ export default function Lobby({
                       </div>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 gap-3 max-h-[220px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+                    <div className="grid max-h-[min(42dvh,260px)] grid-cols-1 gap-3 overflow-y-auto pr-1 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10 sm:grid-cols-2">
                       {activeRooms.map((room) => {
                         const isLiveTranscribing = room.state === "transcribing";
                         return (
@@ -261,7 +261,7 @@ export default function Lobby({
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}
                             onClick={() => handleJoinActiveRoom(room.roomId)}
-                            className="bg-white/[0.02] hover:bg-indigo-500/[0.03] border border-white/[0.06] hover:border-indigo-500/30 rounded-2xl p-4 transition-all duration-300 cursor-pointer shadow-md group relative overflow-hidden flex flex-col justify-between aspect-square select-none min-h-[105px]"
+                            className="group relative flex min-h-[105px] cursor-pointer flex-col justify-between overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 shadow-md transition-all duration-300 select-none hover:border-indigo-500/30 hover:bg-indigo-500/[0.03] sm:aspect-square"
                           >
                             {/* Inner ambient glow */}
                             <div className={`absolute -right-6 -bottom-6 w-16 h-16 rounded-full blur-xl opacity-20 transition-all ${
@@ -376,7 +376,7 @@ export default function Lobby({
 
         {/* Subtle bottom text */}
         <p className="text-center text-[10px] font-medium text-gray-600 mt-5 tracking-wide select-none">
-          Powered by Agora · Deepgram · Socket.IO
+          Powered by Agora - Deepgram - Socket.IO
         </p>
       </motion.div>
     </div>

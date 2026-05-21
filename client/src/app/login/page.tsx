@@ -42,7 +42,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-[#07070a] px-4 font-sans relative overflow-hidden">
+    <div className="relative flex min-h-[100dvh] flex-col items-center justify-center overflow-x-hidden overflow-y-auto bg-[#07070a] px-3 py-6 font-sans sm:px-4 sm:py-8">
       {/* Dynamic Ambient Background Neon Glows */}
       <motion.div 
         animate={{ 
@@ -74,22 +74,22 @@ export default function LoginPage() {
         {/* Glow behind the card */}
         <div className="absolute inset-0 bg-gradient-to-r from-blue-500/5 to-purple-500/5 rounded-3xl blur-[40px]" />
 
-        <div className="bg-[#0b0b10]/70 border border-white/[0.07] hover:border-white/[0.1] rounded-3xl p-8 backdrop-blur-3xl shadow-2xl shadow-black/80 relative overflow-hidden transition-all duration-300">
+        <div className="relative overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0b0b10]/70 p-5 shadow-2xl shadow-black/80 backdrop-blur-3xl transition-all duration-300 hover:border-white/[0.1] sm:rounded-3xl sm:p-8">
           
           {/* Logo / Header */}
-          <div className="text-center mb-8">
+          <div className="mb-6 text-center sm:mb-8">
             <motion.div
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
               transition={{ type: "spring", stiffness: 450, damping: 18, delay: 0.15 }}
-              className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-600 mb-4 shadow-lg shadow-indigo-500/20 relative"
+              className="relative mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-600 shadow-lg shadow-indigo-500/20 sm:h-14 sm:w-14"
             >
               <div className="absolute inset-0 bg-indigo-500 rounded-2xl blur-[12px] opacity-35 animate-pulse" />
-              <svg className="w-6 h-6 text-white relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="relative z-10 h-5 w-5 text-white sm:h-6 sm:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
               </svg>
             </motion.div>
-            <h1 className="text-2xl font-extrabold text-white tracking-tight bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">LiveRoom</h1>
+            <h1 className="bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-xl font-extrabold tracking-tight text-transparent sm:text-2xl">LiveRoom</h1>
             <p className="text-xs text-gray-500 mt-1 select-none font-medium">Sign in to initialize secure interview workspace</p>
           </div>
 

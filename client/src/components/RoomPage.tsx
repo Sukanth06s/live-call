@@ -38,6 +38,16 @@ interface RoomPageProps {
   onStopTranscription: () => void;
 }
 
+type VideoItem = {
+  id: string;
+  track: VideoTrackLike | null | undefined;
+  isVideoEnabled: boolean;
+  userName: string;
+  role: string;
+  isSpeaking?: boolean;
+  isLocal?: boolean;
+};
+
 export default function RoomPage({
   roomId,
   userName,
@@ -62,10 +72,10 @@ export default function RoomPage({
   onStopTranscription,
 }: RoomPageProps) {
   const copyRoomId = useCallback(() => {
-    navigator.clipboard.writeText(roomId);
+    void navigator.clipboard.writeText(roomId);
   }, [roomId]);
 
-  const currentUser = users.find(u => u.id === currentUserId);
+  const currentUser = users.find((u) => u.id === currentUserId);
   const resolvedRole = userRole || currentUser?.role || "candidate";
   const isHr = resolvedRole === "hr";
   const isSuperAdmin = resolvedRole === "super_admin";
@@ -74,246 +84,324 @@ export default function RoomPage({
     return u.role === "candidate" || u.role === "hr";
   });
   const shouldShowLocalVideo = !isSuperAdmin;
-  const shouldShowVideoStrip = shouldShowLocalVideo || remoteUsers.length > 0 || visibleRemoteRoomUsers.length > 0;
   const remoteVideoTracksBySocketId = new Map(
     remoteUsers
       .filter((remoteUser) => remoteUser.videoTrack)
       .map((remoteUser) => [String(remoteUser.uid), remoteUser.videoTrack as VideoTrackLike])
   );
 
-  return (
-    <div className="h-screen bg-[#07070a] flex relative overflow-hidden">
-      {/* Background ambient glow */}
-      <div className="fixed top-0 left-1/4 w-[500px] h-[500px] bg-blue-600/5 rounded-full blur-[150px] pointer-events-none" />
-      <div className="fixed bottom-0 right-1/4 w-[500px] h-[500px] bg-purple-600/5 rounded-full blur-[150px] pointer-events-none" />
+  const videoItems: VideoItem[] = [
+    ...(shouldShowLocalVideo
+      ? [{
+          id: "local",
+          track: localCameraTrack,
+          isVideoEnabled,
+          userName,
+          role: resolvedRole,
+          isSpeaking: currentUser?.isSpeaking,
+          isLocal: true,
+        }]
+      : []),
+    ...visibleRemoteRoomUsers.map((roomUser) => ({
+      id: roomUser.id,
+      track: roomUser.isVideoEnabled ? remoteVideoTracksBySocketId.get(roomUser.id) : null,
+      isVideoEnabled: roomUser.isVideoEnabled,
+      userName: roomUser.name,
+      role: roomUser.role,
+      isSpeaking: roomUser.isSpeaking,
+      isLocal: false,
+    })),
+  ];
+  const shouldShowVideoStrip = videoItems.length > 0;
 
-      {/* LEFT SIDEBAR */}
+  const roleLabel =
+    resolvedRole === "hr" ? "HR / Interviewer" : resolvedRole === "super_admin" ? "Super Admin Observer" : "Candidate";
+  const rolePillClass =
+    resolvedRole === "hr"
+      ? "from-purple-500/10 to-indigo-500/10 border-purple-500/20 text-purple-300"
+      : resolvedRole === "super_admin"
+        ? "from-orange-500/10 to-rose-500/10 border-orange-500/20 text-orange-300"
+        : "from-emerald-500/10 to-teal-500/10 border-emerald-500/20 text-emerald-300";
+  const roleDotClass =
+    resolvedRole === "hr" ? "bg-purple-500" : resolvedRole === "super_admin" ? "bg-orange-500" : "bg-emerald-500";
+
+  const renderRolePill = (compact = false) => (
+    <div className={`flex items-center gap-2 rounded-lg border bg-gradient-to-r font-semibold shadow-inner ${rolePillClass} ${compact ? "px-2.5 py-1.5 text-[11px]" : "w-full px-3 py-2 text-xs"}`}>
+      <span className="relative flex h-2 w-2">
+        <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${roleDotClass}`} />
+        <span className={`relative inline-flex h-2 w-2 rounded-full ${roleDotClass}`} />
+      </span>
+      <span className="truncate">{roleLabel}</span>
+    </div>
+  );
+
+  const renderRoomIdButton = (compact = false) => (
+    <button
+      onClick={copyRoomId}
+      className={`group flex min-w-0 items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.03] transition-colors hover:bg-white/[0.06] ${compact ? "px-2.5 py-1.5" : "w-full px-3 py-2"}`}
+    >
+      <svg className="h-3.5 w-3.5 shrink-0 text-gray-500 transition-colors group-hover:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+      </svg>
+      <span className="truncate font-mono text-xs text-gray-400">{roomId}</span>
+      {!compact && <span className="ml-auto text-[10px] text-gray-600 opacity-0 transition-opacity group-hover:opacity-100">Copy</span>}
+    </button>
+  );
+
+  const renderObserverNotice = (compact = false) => (
+    <div className={`w-full rounded-xl border border-orange-500/20 bg-orange-500/10 text-orange-300 shadow-[0_0_15px_rgba(249,115,22,0.1)] ${compact ? "px-3 py-2" : "px-4 py-4"}`}>
+      <div className="flex items-center gap-2 text-sm font-semibold text-orange-200">
+        <span className="relative flex h-2.5 w-2.5">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-orange-400 opacity-75" />
+          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-orange-500" />
+        </span>
+        <span>Silent Observer Mode</span>
+      </div>
+      {!compact && (
+        <p className="mt-2 text-[11px] font-normal leading-relaxed text-orange-300/70">
+          You are viewing this room anonymously. Your microphone is completely disabled, and you are hidden from candidates and HR.
+        </p>
+      )}
+    </div>
+  );
+
+  const renderVideoToggleButton = (mobile = false) => (
+    <motion.button
+      onClick={onToggleVideo}
+      whileTap={{ scale: 0.93 }}
+      className={`relative flex items-center justify-center gap-2.5 rounded-2xl border font-semibold tracking-wide transition-all duration-300 ${
+        mobile ? "min-h-12 px-3 py-3 text-xs" : "py-3.5 text-sm"
+      } ${
+        isVideoEnabled
+          ? "border-sky-500/20 bg-sky-500/15 text-sky-400 hover:bg-sky-500/25"
+          : "border-amber-500/20 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25"
+      }`}
+    >
+      {isVideoEnabled ? (
+        <svg className="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+      ) : (
+        <svg className="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2zM3 3l18 18" />
+        </svg>
+      )}
+      <span>{isVideoEnabled ? "Camera" : "Camera Off"}</span>
+    </motion.button>
+  );
+
+  const renderTranscriptionControl = (compact = false) => {
+    if (isHr) {
+      return !isTranscribing ? (
+        <motion.button
+          onClick={onStartTranscription}
+          whileTap={{ scale: 0.97 }}
+          className={`w-full rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 font-semibold text-white shadow-lg shadow-blue-500/20 transition-all duration-300 hover:shadow-blue-500/40 ${compact ? "px-3 py-3 text-xs" : "py-3 text-sm"}`}
+        >
+          Start Transcription
+        </motion.button>
+      ) : (
+        <div className={compact ? "grid grid-cols-[1fr_auto] gap-2" : "space-y-2"}>
+          <div className="flex w-full items-center justify-between rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-3 text-xs font-medium text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.1)] sm:px-4 sm:text-sm">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="relative flex h-2.5 w-2.5 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+              </span>
+              <span className="truncate">{compact ? "AI Live" : "AI Live Transcription Active"}</span>
+            </div>
+            {!compact && <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-200">Live</span>}
+          </div>
+          <motion.button
+            onClick={onStopTranscription}
+            whileTap={{ scale: 0.97 }}
+            className={`rounded-xl border border-red-500/20 bg-red-500/10 font-semibold text-red-400 shadow-lg shadow-red-500/5 transition-all duration-300 hover:border-red-600 hover:bg-red-600 hover:text-white hover:shadow-red-500/20 ${compact ? "px-4 py-3 text-xs" : "w-full py-3 text-sm"}`}
+          >
+            Stop
+          </motion.button>
+        </div>
+      );
+    }
+
+    return !isTranscribing ? (
+      <div className="flex w-full items-center gap-2.5 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-3 text-xs font-medium text-gray-500 sm:px-4 sm:text-sm">
+        <div className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-gray-600" />
+        <span className="truncate">Waiting for HR to start AI</span>
+      </div>
+    ) : (
+      <div className="flex w-full items-center justify-between rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-3 text-xs font-medium text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.1)] sm:px-4 sm:text-sm">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+          </span>
+          <span className="truncate">AI Transcription Running</span>
+        </div>
+      </div>
+    );
+  };
+
+  const renderMediaControls = (mobile = false) => {
+    if (isSuperAdmin) return renderObserverNotice(mobile);
+
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        <MuteButton isMuted={isMuted} onToggle={onToggleMute} compact={mobile} />
+        {renderVideoToggleButton(mobile)}
+      </div>
+    );
+  };
+
+  const renderLeaveButton = (compact = false) => (
+    <motion.button
+      onClick={onLeaveRoom}
+      whileTap={{ scale: 0.97 }}
+      className={`w-full rounded-xl border border-white/[0.06] bg-white/[0.04] font-medium text-gray-400 transition-all duration-300 hover:border-red-500/20 hover:bg-red-500/10 hover:text-red-400 ${compact ? "px-3 py-3 text-xs" : "py-3 text-sm"}`}
+    >
+      Leave Room
+    </motion.button>
+  );
+
+  const renderSidebarContent = () => (
+    <>
+      <div className="border-b border-white/[0.06] p-5">
+        <div className="mb-3 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 shadow-lg shadow-blue-500/20">
+            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+            </svg>
+          </div>
+          <div>
+            <h1 className="text-base font-bold text-white">LiveRoom</h1>
+            <p className="text-[11px] text-gray-500">Speaker Conversational Workspace</p>
+          </div>
+        </div>
+        {renderRoomIdButton()}
+        <div className="mt-3">
+          {renderRolePill()}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-4">
+        <UserList users={users} currentUserId={currentUserId} />
+      </div>
+
+      <div className="space-y-3 border-t border-white/[0.06] p-5">
+        <ConnectionStatus isConnected={isConnected} isAgoraJoined={isAgoraJoined} isTranscribing={isTranscribing} />
+        <div className="space-y-2 pt-2">
+          {renderMediaControls()}
+          {renderTranscriptionControl()}
+          {renderLeaveButton()}
+        </div>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="relative flex h-[100dvh] min-h-[100dvh] overflow-hidden bg-[#07070a] text-white lg:flex-row">
+      <div className="pointer-events-none fixed left-1/4 top-0 h-[420px] w-[420px] rounded-full bg-blue-600/5 blur-[140px] sm:h-[500px] sm:w-[500px]" />
+      <div className="pointer-events-none fixed bottom-0 right-1/4 h-[420px] w-[420px] rounded-full bg-purple-600/5 blur-[140px] sm:h-[500px] sm:w-[500px]" />
+
       <motion.aside
         initial={{ x: -300, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         transition={{ type: "spring", stiffness: 300, damping: 30 }}
-        className="w-80 h-full flex-shrink-0 border-r border-white/[0.06] bg-[#0b0b10]/60 backdrop-blur-xl flex flex-col overflow-hidden"
+        className="hidden h-full w-80 shrink-0 flex-col overflow-hidden border-r border-white/[0.06] bg-[#0b0b10]/60 backdrop-blur-xl lg:flex"
       >
-        {/* Room header */}
-        <div className="p-5 border-b border-white/[0.06]">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
-              <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
-            </div>
-            <div>
-              <h1 className="text-base font-bold text-white">LiveRoom</h1>
-              <p className="text-[11px] text-gray-500">Speaker Conversational Workspace</p>
-            </div>
-          </div>
-
-          {/* Room ID badge */}
-          <button
-            onClick={copyRoomId}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] transition-colors group"
-          >
-            <svg className="w-3.5 h-3.5 text-gray-500 group-hover:text-gray-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-            <span className="text-xs text-gray-400 truncate font-mono">{roomId}</span>
-            <span className="ml-auto text-[10px] text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity">Copy</span>
-          </button>
-
-          {/* Active Role Pill Badge */}
-          <div className="mt-3">
-            {resolvedRole === "hr" && (
-              <div className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-purple-500/10 to-indigo-500/10 border border-purple-500/20 text-purple-300 font-semibold shadow-inner shadow-purple-500/5">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.8)]"></span>
-                </span>
-                <span className="text-xs">HR / Interviewer</span>
-              </div>
-            )}
-            {resolvedRole === "candidate" && (
-              <div className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 text-emerald-300 font-semibold shadow-inner shadow-emerald-500/5">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
-                </span>
-                <span className="text-xs">Candidate</span>
-              </div>
-            )}
-            {resolvedRole === "super_admin" && (
-              <div className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-orange-500/10 to-rose-500/10 border border-orange-500/20 text-orange-300 font-semibold shadow-inner shadow-orange-500/5">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.8)]"></span>
-                </span>
-                <span className="text-xs">Super Admin Observer</span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Participants section */}
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          <UserList users={users} currentUserId={currentUserId} />
-        </div>
-
-        {/* Bottom controls */}
-        <div className="p-5 border-t border-white/[0.06] space-y-3">
-          <ConnectionStatus
-            isConnected={isConnected}
-            isAgoraJoined={isAgoraJoined}
-            isTranscribing={isTranscribing}
-          />
-
-          <div className="pt-2 space-y-2">
-            {resolvedRole === "super_admin" ? (
-              <div className="w-full py-4 px-4 rounded-xl bg-orange-500/10 border border-orange-500/20 flex flex-col gap-2 text-orange-300 font-medium text-sm shadow-[0_0_15px_rgba(249,115,22,0.1)] select-none">
-                <div className="flex items-center gap-2">
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.8)]"></span>
-                  </span>
-                  <span className="font-semibold text-orange-200">Silent Observer Mode</span>
-                </div>
-                <p className="text-[11px] text-orange-300/70 leading-relaxed font-normal">
-                  You are viewing this room anonymously. Your microphone is completely disabled, and you are hidden from candidates and HR.
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-2">
-                <MuteButton isMuted={isMuted} onToggle={onToggleMute} />
-                <motion.button
-                  onClick={onToggleVideo}
-                  whileTap={{ scale: 0.93 }}
-                  className={`relative flex items-center justify-center gap-2.5 rounded-2xl border py-3.5 text-sm font-semibold tracking-wide transition-all duration-300 ${
-                    isVideoEnabled
-                      ? "border-sky-500/20 bg-sky-500/15 text-sky-400 hover:bg-sky-500/25"
-                      : "border-amber-500/20 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25"
-                  }`}
-                >
-                  {isVideoEnabled ? (
-                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                  ) : (
-                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2zM3 3l18 18" />
-                    </svg>
-                  )}
-                  <span>{isVideoEnabled ? "Camera" : "Camera Off"}</span>
-                </motion.button>
-              </div>
-            )}
-
-            {isHr ? (
-              !isTranscribing ? (
-                <motion.button
-                  onClick={onStartTranscription}
-                  whileTap={{ scale: 0.97 }}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm font-semibold shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40 transition-all duration-300 cursor-pointer"
-                >
-                  Start Transcription
-                </motion.button>
-              ) : (
-                <div className="space-y-2">
-                  <div className="w-full py-3 px-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between text-emerald-300 font-medium text-sm shadow-[0_0_15px_rgba(16,185,129,0.1)] animate-pulse">
-                    <div className="flex items-center gap-2">
-                      <span className="relative flex h-2.5 w-2.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
-                      </span>
-                      <span>AI Live Transcription Active</span>
-                    </div>
-                    <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-200">Live</span>
-                  </div>
-                  <motion.button
-                    onClick={onStopTranscription}
-                    whileTap={{ scale: 0.97 }}
-                    className="w-full py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm font-semibold hover:bg-red-600 hover:text-white hover:border-red-600 transition-all duration-300 cursor-pointer shadow-lg shadow-red-500/5 hover:shadow-red-500/20"
-                  >
-                    Stop Transcription
-                  </motion.button>
-                </div>
-              )
-            ) : (
-              !isTranscribing ? (
-                <div className="w-full py-3 px-4 rounded-xl bg-white/[0.02] border border-white/[0.05] flex items-center gap-2.5 text-gray-500 text-sm font-medium">
-                  <div className="w-1.5 h-1.5 rounded-full bg-gray-600 animate-pulse" />
-                  <span>Waiting for HR to start AI</span>
-                </div>
-              ) : (
-                <div className="w-full py-3 px-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between text-emerald-300 font-medium text-sm shadow-[0_0_15px_rgba(16,185,129,0.1)] animate-pulse">
-                  <div className="flex items-center gap-2">
-                    <span className="relative flex h-2.5 w-2.5">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
-                    </span>
-                    <span>AI Transcription Running</span>
-                  </div>
-                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-200">Running</span>
-                </div>
-              )
-            )}
-
-            <motion.button
-              onClick={onLeaveRoom}
-              whileTap={{ scale: 0.97 }}
-              className="w-full py-3 rounded-xl bg-white/[0.04] border border-white/[0.06] text-gray-400 text-sm font-medium hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20 transition-all duration-300"
-            >
-              Leave Room
-            </motion.button>
-          </div>
-        </div>
+        {renderSidebarContent()}
       </motion.aside>
 
-      {/* RIGHT PANEL - Transcript */}
       <motion.main
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.15 }}
-        className="flex-1 flex flex-col min-w-0 h-full overflow-hidden"
+        className="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-hidden"
       >
-        {shouldShowVideoStrip && (
-          <div className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/40 px-6 py-4 backdrop-blur-md">
-            <div className="flex h-[clamp(170px,27vh,280px)] items-stretch gap-4 overflow-x-auto pb-1">
-              {shouldShowLocalVideo && (
-                <VideoPlayer
-                  track={localCameraTrack}
-                  isVideoEnabled={isVideoEnabled}
-                  userName={userName}
-                  role={resolvedRole}
-                  isSpeaking={currentUser?.isSpeaking}
-                  isLocal
-                />
-              )}
-              {visibleRemoteRoomUsers.map((roomUser) => {
-                const track = roomUser.isVideoEnabled ? remoteVideoTracksBySocketId.get(roomUser.id) : null;
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:flex lg:flex-col lg:overflow-hidden">
+          <header className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/70 px-3 py-2.5 backdrop-blur-md sm:px-4 lg:hidden">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-purple-600">
+                    <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                    </svg>
+                  </div>
+                  <div className="min-w-0">
+                    <h1 className="truncate text-sm font-bold text-white">LiveRoom</h1>
+                    <p className="truncate text-[10px] text-gray-500">Realtime workspace</p>
+                  </div>
+                </div>
+              </div>
+              <div className="flex min-w-0 shrink items-center gap-2">
+                {renderRoomIdButton(true)}
+              </div>
+            </div>
+            <div className="mt-2 flex items-center gap-2 overflow-hidden">
+              {renderRolePill(true)}
+              <div className={`ml-auto h-2 w-2 shrink-0 rounded-full ${isConnected ? "bg-emerald-400" : "bg-red-400"}`} />
+            </div>
+          </header>
+
+          <details className="group shrink-0 border-b border-white/[0.06] bg-[#09090d]/90 backdrop-blur-md lg:hidden">
+            <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-gray-400 sm:px-4">
+              <span>Participants and Status</span>
+              <svg className="h-3.5 w-3.5 text-gray-500 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
+              </svg>
+            </summary>
+            <div className="grid max-h-[34dvh] gap-3 overflow-y-auto border-t border-white/[0.05] px-3 py-3 sm:grid-cols-[minmax(0,1fr)_260px] sm:px-4">
+              <UserList users={users} currentUserId={currentUserId} />
+              <ConnectionStatus isConnected={isConnected} isAgoraJoined={isAgoraJoined} isTranscribing={isTranscribing} />
+            </div>
+          </details>
+
+          {shouldShowVideoStrip && (
+            <section className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/40 px-3 py-3 backdrop-blur-md sm:px-4 lg:px-6 lg:py-4">
+              <div className="grid gap-2 sm:grid-cols-2 lg:flex lg:h-[clamp(170px,27vh,280px)] lg:items-stretch lg:gap-4 lg:overflow-x-auto lg:pb-1">
+              {videoItems.map((item) => {
                 return (
                   <VideoPlayer
-                    key={roomUser.id}
-                    track={track}
-                    isVideoEnabled={roomUser.isVideoEnabled}
-                    userName={roomUser.name}
-                    role={roomUser.role}
-                    isSpeaking={roomUser.isSpeaking}
+                    key={item.id}
+                      track={item.track}
+                      isVideoEnabled={item.isVideoEnabled}
+                      userName={item.userName}
+                    role={item.role}
+                    isSpeaking={item.isSpeaking}
+                    isLocal={item.isLocal}
+                    className="h-[clamp(150px,28dvh,220px)] w-full min-w-0 lg:h-full lg:w-auto lg:min-w-[260px] lg:max-w-[min(52vw,560px)] xl:min-w-[300px]"
                   />
                 );
               })}
+              </div>
+            </section>
+          )}
+
+          <div className="min-h-[360px] flex-1 overflow-hidden pb-4 sm:min-h-[420px] lg:min-h-0 lg:pb-0">
+            <TranscriptPanel
+              blocks={blocks}
+              currentUserName={userName}
+              roomId={roomId}
+              onEditBlock={onEditBlock}
+              onClearTranscript={onClearTranscript}
+              onReplaceTranscript={onReplaceTranscript}
+              isTranscribing={isTranscribing}
+              isHr={isHr}
+              isSuperAdmin={isSuperAdmin}
+              onStopTranscription={onStopTranscription}
+            />
+          </div>
+        </div>
+
+        <div className="sticky bottom-0 z-20 shrink-0 border-t border-white/[0.08] bg-[#0b0b10]/95 px-3 pt-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] shadow-2xl shadow-black/50 backdrop-blur-xl lg:hidden">
+          <div className="mx-auto grid max-w-3xl gap-2">
+            {renderMediaControls(true)}
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+              {renderTranscriptionControl(true)}
+              {renderLeaveButton(true)}
             </div>
           </div>
-        )}
-        <TranscriptPanel
-          blocks={blocks}
-          currentUserName={userName}
-          roomId={roomId}
-          onEditBlock={onEditBlock}
-          onClearTranscript={onClearTranscript}
-          onReplaceTranscript={onReplaceTranscript}
-          isTranscribing={isTranscribing}
-          isHr={isHr}
-          isSuperAdmin={isSuperAdmin}
-          onStopTranscription={onStopTranscription}
-        />
+        </div>
       </motion.main>
     </div>
   );

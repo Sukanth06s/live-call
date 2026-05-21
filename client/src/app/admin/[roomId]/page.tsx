@@ -25,7 +25,7 @@ export default function ObserverRedirect({ params }: { params: { roomId: string 
   }, [params.roomId, router]);
 
   return (
-    <div className="min-h-screen bg-[#07070a] text-white flex items-center justify-center font-[var(--font-inter)]">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-[#07070a] px-4 text-center text-white">
       <p>Initializing Observer Connection...</p>
     </div>
   );

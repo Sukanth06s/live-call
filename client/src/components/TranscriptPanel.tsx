@@ -91,23 +91,24 @@ export default function TranscriptPanel({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-[#07070a] select-none">
+    <div className="flex h-full min-h-0 flex-1 flex-col bg-[#07070a] select-none">
       {/* GLOBAL HEADER */}
-      <div className="flex items-center gap-3 px-6 py-4 border-b border-white/[0.06] bg-[#0b0b10]/40 backdrop-blur-md">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/[0.06] bg-[#0b0b10]/40 px-3 py-3 backdrop-blur-md sm:gap-3 sm:px-4 lg:px-6 lg:py-4">
         <div className="relative flex items-center justify-center w-2 h-2">
           <div className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse" />
           <div className="absolute w-2.5 h-2.5 rounded-full bg-indigo-500 animate-ping opacity-45" />
         </div>
-        <h2 className="text-sm font-bold text-gray-200 tracking-wide uppercase">Conversational Workspace</h2>
+        <h2 className="text-xs font-bold uppercase tracking-wide text-gray-200 sm:text-sm">Conversational Workspace</h2>
         
         {/* Active badge */}
         {isTranscribing ? (
-          <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-400 font-semibold select-none">
+          <span className="flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-semibold text-emerald-400 select-none sm:px-2.5 sm:text-[10px]">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)] animate-pulse" />
-            Live Deepgram Stream Active
+            <span className="hidden sm:inline">Live Deepgram Stream Active</span>
+            <span className="sm:hidden">Live</span>
           </span>
         ) : (
-          <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-gray-500/10 border border-gray-500/20 text-[10px] text-gray-400 font-semibold select-none">
+          <span className="flex items-center gap-1.5 rounded-full border border-gray-500/20 bg-gray-500/10 px-2 py-0.5 text-[9px] font-semibold text-gray-400 select-none sm:px-2.5 sm:text-[10px]">
             <span className="w-1.5 h-1.5 rounded-full bg-gray-500" />
             Engine Idle
           </span>
@@ -118,32 +119,32 @@ export default function TranscriptPanel({
           <motion.button
             whileTap={{ scale: 0.95 }}
             onClick={onStopTranscription}
-            className="px-3.5 py-1 rounded-lg bg-red-500/15 border border-red-500/30 text-red-400 text-xs font-bold uppercase hover:bg-red-600 hover:text-white hover:border-red-600 transition-all duration-300 cursor-pointer shadow-md shadow-red-500/5 hover:shadow-red-500/25 ml-2"
+            className="rounded-lg border border-red-500/30 bg-red-500/15 px-2.5 py-1 text-[10px] font-bold uppercase text-red-400 shadow-md shadow-red-500/5 transition-all duration-300 hover:border-red-600 hover:bg-red-600 hover:text-white hover:shadow-red-500/25 sm:ml-2 sm:px-3.5 sm:text-xs"
           >
             Stop Transcription
           </motion.button>
         )}
 
         {/* Global info metrics */}
-        <span className="ml-auto text-xs text-gray-500 font-bold uppercase tracking-wider font-mono">
+        <span className="ml-auto font-mono text-[10px] font-bold uppercase tracking-wider text-gray-500 sm:text-xs">
           Total Blocks: {blocks.length}
         </span>
       </div>
 
       {/* SINGLE MAIN TRANSCRIPTION CONTENT BOX */}
-      <div className="flex-1 p-6 min-h-0 overflow-hidden flex flex-col bg-[#07070a]">
-        <div className="flex-1 flex flex-col h-full min-h-0 bg-[#0a0a0f]/60 border border-white/[0.05] rounded-3xl overflow-hidden shadow-2xl relative">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#07070a] p-3 sm:p-4 lg:p-6">
+        <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/[0.05] bg-[#0a0a0f]/60 shadow-2xl sm:rounded-3xl">
           
           {/* Box Header */}
-          <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.05] bg-[#0c0c12]/40">
-            <div className="flex items-center gap-4">
+          <div className="flex shrink-0 flex-col gap-3 border-b border-white/[0.05] bg-[#0c0c12]/40 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-4">
+            <div className="flex min-w-0 flex-wrap items-center gap-3 sm:gap-4">
               <div className="flex items-center gap-2">
                 <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)] animate-pulse" />
-                <h3 className="text-xs font-bold uppercase tracking-widest text-emerald-400">Candidate Speech Log</h3>
+                <h3 className="text-[11px] font-bold uppercase tracking-widest text-emerald-400 sm:text-xs">Candidate Speech Log</h3>
               </div>
               
               {/* Core live stats indicators inside header */}
-              <div className="hidden md:flex items-center gap-3 border-l border-white/[0.06] pl-4 text-[10px] text-gray-500 font-bold uppercase tracking-wider font-mono">
+              <div className="hidden items-center gap-3 border-l border-white/[0.06] pl-4 font-mono text-[10px] font-bold uppercase tracking-wider text-gray-500 md:flex">
                 <span className="flex items-center gap-1">
                   Engine: <span className={isTranscribing ? "text-emerald-400" : "text-gray-500"}>{isTranscribing ? "Connected" : "Idle"}</span>
                 </span>
@@ -157,27 +158,29 @@ export default function TranscriptPanel({
             
             {/* Actions Bar */}
             {!isSuperAdmin && candidateBlocks.length > 0 && !isEditing && (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={handleStartOverallEdit}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500 hover:text-white transition-all text-[11px] font-bold uppercase cursor-pointer"
+                  className="flex items-center gap-1 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] font-bold uppercase text-emerald-400 transition-all hover:bg-emerald-500 hover:text-white sm:px-3 sm:text-[11px]"
                   title="Edit accumulated transcript content"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                   </svg>
-                  Edit Transcript
+                  <span className="hidden sm:inline">Edit Transcript</span>
+                  <span className="sm:hidden">Edit</span>
                 </button>
                 {onClearTranscript && (
                   <button
                     onClick={onClearTranscript}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500 hover:text-white transition-all text-[11px] font-bold uppercase cursor-pointer"
+                    className="flex items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1.5 text-[10px] font-bold uppercase text-red-400 transition-all hover:bg-red-500 hover:text-white sm:px-3 sm:text-[11px]"
                     title="Clear transcript content"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1H9a1 1 0 00-1 1v3M4 7h16" />
                     </svg>
-                    Clear Box
+                    <span className="hidden sm:inline">Clear Box</span>
+                    <span className="sm:hidden">Clear</span>
                   </button>
                 )}
               </div>
@@ -185,48 +188,48 @@ export default function TranscriptPanel({
           </div>
 
           {/* Box Body */}
-          <div className="flex-1 p-5 min-h-0 overflow-hidden flex flex-col bg-[#07070a]/40">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#07070a]/40 p-3 sm:p-4 lg:p-5">
             {isEditing ? (
-              <div className="flex flex-col h-full space-y-3">
+              <div className="flex h-full min-h-0 flex-col space-y-3">
                 <textarea
                   value={editContent}
                   onChange={(e) => setEditContent(e.target.value)}
-                  className="flex-1 w-full bg-[#09090d] border border-emerald-500/30 rounded-2xl p-4 text-sm text-gray-200 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20 transition-all font-medium leading-relaxed resize-none shadow-inner"
+                  className="min-h-0 flex-1 w-full resize-none rounded-xl border border-emerald-500/30 bg-[#09090d] p-3 text-sm font-medium leading-relaxed text-gray-200 shadow-inner transition-all focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/20 sm:rounded-2xl sm:p-4"
                   placeholder="Edit candidate transcript..."
                   autoFocus
                 />
-                <div className="flex gap-2 justify-end">
+                <div className="flex shrink-0 justify-end gap-2">
                   <button
                     onClick={() => setIsEditing(false)}
-                    className="px-4 py-2 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] text-xs text-gray-400 font-semibold cursor-pointer transition-colors"
+                    className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-2 text-xs font-semibold text-gray-400 transition-colors hover:bg-white/[0.06]"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={handleSaveOverallEdit}
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-xs font-semibold cursor-pointer shadow-md shadow-emerald-500/10 hover:shadow-emerald-500/20 transition-all"
+                    className="rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-md shadow-emerald-500/10 transition-all hover:shadow-emerald-500/20"
                   >
                     Save Changes
                   </button>
                 </div>
               </div>
             ) : candidateBlocks.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center text-center p-6 space-y-4 select-none">
-                <div className="w-16 h-16 rounded-2xl bg-white/[0.02] border border-white/[0.04] flex items-center justify-center text-emerald-500/40 relative">
+              <div className="flex flex-1 flex-col items-center justify-center space-y-4 p-4 text-center select-none sm:p-6">
+                <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl border border-white/[0.04] bg-white/[0.02] text-emerald-500/40 sm:h-16 sm:w-16">
                   <div className="absolute inset-0 bg-emerald-500 rounded-2xl blur-[15px] opacity-10 animate-pulse" />
-                  <svg className="w-8 h-8 relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="relative z-10 h-7 w-7 sm:h-8 sm:w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                   </svg>
                 </div>
                 <div>
                   <p className="text-sm font-bold text-gray-400">Awaiting Candidate Speech...</p>
-                  <p className="text-xs text-gray-600 mt-1 max-w-[240px] mx-auto leading-relaxed">Spoken sentences will flow here in real time into a single collaborative document.</p>
+                  <p className="mx-auto mt-1 max-w-[240px] text-xs leading-relaxed text-gray-600">Spoken sentences will flow here in real time into a single collaborative document.</p>
                 </div>
               </div>
             ) : (
               <div 
                 ref={candidateScrollRef}
-                className="flex-1 overflow-y-auto bg-[#08080c]/60 border border-white/[0.03] rounded-2xl p-6 shadow-inner leading-relaxed text-gray-300 font-medium font-sans text-sm tracking-wide scrollbar-thin scrollbar-thumb-white/5 scrollbar-track-transparent"
+                className="flex-1 overflow-y-auto overscroll-contain rounded-xl border border-white/[0.03] bg-[#08080c]/60 p-4 font-sans text-sm font-medium leading-relaxed tracking-wide text-gray-300 shadow-inner scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/5 sm:rounded-2xl sm:p-5 lg:p-6"
               >
                 <div className="flex flex-col min-h-full">
                   <div className="flex-1" />
@@ -279,7 +282,7 @@ export default function TranscriptPanel({
 
           {/* Box Footer Stats */}
           {candidateBlocks.length > 0 && (
-            <div className="px-5 py-3.5 border-t border-white/[0.04] bg-[#0c0c12]/20 flex items-center justify-between text-[10px] text-gray-500 font-bold uppercase tracking-wider font-mono">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-white/[0.04] bg-[#0c0c12]/20 px-3 py-2.5 font-mono text-[9px] font-bold uppercase tracking-wider text-gray-500 sm:px-5 sm:py-3.5 sm:text-[10px]">
               <span>Words logged: {getWordCount(candidateBlocks)}</span>
               <span>Total Turns committed: {candidateBlocks.filter(b => b.status === "final").length}</span>
             </div>
