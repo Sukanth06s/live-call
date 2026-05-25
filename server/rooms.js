@@ -30,7 +30,7 @@ function createRoom(roomId) {
   return rooms.get(roomId);
 }
 
-function joinRoom(roomId, userId, userName, authUserId, role) {
+function joinRoom(roomId, userId, userName, authUserId, role, agoraUid = null) {
   const room = createRoom(roomId);
   const existingUser =
     role === "candidate"
@@ -41,6 +41,7 @@ function joinRoom(roomId, userId, userName, authUserId, role) {
   
   const user = {
     id: userId,
+    agoraUid,
     authUserId,
     name: userName,
     role,

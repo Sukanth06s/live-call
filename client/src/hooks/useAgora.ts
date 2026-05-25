@@ -19,12 +19,13 @@ export function useAgora() {
   const [isJoined, setIsJoined] = useState(false);
   const [remoteUsers, setRemoteUsers] = useState<IAgoraRTCRemoteUser[]>([]);
 
-  const joinChannel = useCallback(async (channelName: string, token?: string, uid?: string, role: string = "candidate") => {
+  const joinChannel = useCallback(async (channelName: string, token?: string, uid?: number, role: string = "candidate") => {
     if (clientRef.current) return;
     
     console.log("[Agora] Attempting to join channel:");
     console.log(" - APP_ID:", APP_ID ? `${APP_ID.substring(0, 5)}...` : "EMPTY!");
     console.log(" - ChannelName:", channelName);
+    console.log(" - UID:", uid);
     console.log(" - HasToken:", !!token);
     console.log(" - Role:", role);
 
@@ -55,8 +56,10 @@ export function useAgora() {
       });
     });
 
-    client.on("user-unpublished", (user: IAgoraRTCRemoteUser) => {
-      setRemoteUsers((prev) => prev.filter((u) => u.uid !== user.uid));
+    client.on("user-unpublished", (user: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => {
+      if (mediaType === "video") {
+        setRemoteUsers((prev) => prev.filter((u) => u.uid !== user.uid));
+      }
     });
 
     client.on("user-left", (user: IAgoraRTCRemoteUser) => {
@@ -64,7 +67,7 @@ export function useAgora() {
     });
 
     // Join channel (token optional)
-    await client.join(APP_ID, channelName, token || null, uid || null);
+    await client.join(APP_ID, channelName, token || null, uid ?? null);
 
     // Only create and publish local tracks if not super_admin
     if (role !== "super_admin") {

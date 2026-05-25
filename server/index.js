@@ -58,6 +58,12 @@ const activeDeepgramConnections = new Map(); // roomId -> { dgConnection, isDeep
 const allowedRoles = new Set(["candidate", "hr", "super_admin"]);
 const activeUserSockets = new Map(); // Supabase auth user id -> active socket id
 
+function createAgoraUid(userId, roomId, role) {
+  const hash = crypto.createHash("sha256").update(`${userId}:${roomId}:${role}`).digest();
+  const uid = hash.readUInt32BE(0);
+  return uid === 0 ? 1 : uid;
+}
+
 async function getAuthenticatedUserFromToken(token) {
   const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
   if (error || !user) {
@@ -429,13 +435,13 @@ app.get("/api/me", async (req, res) => {
 app.get("/api/token", async (req, res) => {
   const channelName = req.query.channelName;
   if (!channelName) return res.status(400).json({ error: "channelName is required" });
-  const uid = String(req.query.uid || "0");
   const token = getBearerToken(req);
   if (!token) return res.status(401).json({ error: "No token provided" });
 
   let authorizedRole;
+  let user;
   try {
-    const user = await getAuthenticatedUserFromToken(token);
+    user = await getAuthenticatedUserFromToken(token);
     authorizedRole = (await getUserProfile(user)).role;
   } catch (err) {
     return res.status(401).json({ error: "Invalid token" });
@@ -445,7 +451,8 @@ app.get("/api/token", async (req, res) => {
   const appCertificate = process.env.AGORA_APP_CERTIFICATE;
   
   const rtcRole = authorizedRole === "super_admin" ? RtcRole.SUBSCRIBER : RtcRole.PUBLISHER;
-  const agoraToken = RtcTokenBuilder.buildTokenWithAccount(appId, appCertificate, channelName, uid, rtcRole, Math.floor(Date.now() / 1000) + 3600);
+  const uid = createAgoraUid(user.id, channelName, authorizedRole);
+  const agoraToken = RtcTokenBuilder.buildTokenWithUid(appId, appCertificate, channelName, uid, rtcRole, Math.floor(Date.now() / 1000) + 3600);
   
   return res.json({ token: agoraToken, uid });
 });
@@ -516,8 +523,9 @@ io.on("connection", (socket) => {
     socket.data.userName = durableName;
     socket.data.roomId = roomId;
     socket.data.role = requestedRole;
+    socket.data.agoraUid = createAgoraUid(socket.data.userId, roomId, requestedRole);
     
-    joinRoom(roomId, socket.id, durableName, socket.data.userId, requestedRole);
+    joinRoom(roomId, socket.id, durableName, socket.data.userId, requestedRole, socket.data.agoraUid);
     socket.join(roomId);
 
     await hydrateRoomWithLatestCandidateTranscript(roomId);

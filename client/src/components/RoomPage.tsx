@@ -108,7 +108,7 @@ export default function RoomPage({
       : []),
     ...visibleRemoteRoomUsers.map((roomUser) => ({
       id: roomUser.id,
-      track: roomUser.isVideoEnabled ? remoteVideoTracksBySocketId.get(roomUser.id) : null,
+      track: roomUser.isVideoEnabled ? remoteVideoTracksBySocketId.get(String(roomUser.agoraUid ?? roomUser.id)) : null,
       isVideoEnabled: roomUser.isVideoEnabled,
       userName: roomUser.name,
       role: roomUser.role,

@@ -6,6 +6,7 @@ export type InterviewState = "waiting" | "active" | "transcribing" | "paused" | 
 
 export interface RoomUser {
   id: string;          // Socket ID
+  agoraUid?: number;   // Numeric Agora RTC UID
   authUserId: string;  // Supabase Auth UUID
   name: string;        // Display name
   role: UserRole;

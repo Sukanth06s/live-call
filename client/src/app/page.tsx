@@ -236,6 +236,7 @@ export default function Home() {
         await joinRoom(newRoomId, newUserName, resolvedRole);
 
         let agoraToken = token;
+        let agoraUid: number | undefined;
         if (!agoraToken) {
           try {
             if (!socketId) {
@@ -247,7 +248,6 @@ export default function Home() {
             }
             const params = new URLSearchParams({
               channelName: newRoomId,
-              uid: socketId,
             });
             const res = await fetch(`${socketUrl}/api/token?${params.toString()}`, {
               headers: {
@@ -256,13 +256,14 @@ export default function Home() {
             });
             const data = await res.json();
             agoraToken = data.token;
+            agoraUid = typeof data.uid === "number" ? data.uid : Number(data.uid);
           } catch (e) {
             console.error("Auto-token fetch failed:", e);
           }
         }
 
         // Just join Agora. The useEffect above will handle starting Deepgram.
-        await joinChannel(newRoomId, agoraToken, socketId || undefined, resolvedRole);
+        await joinChannel(newRoomId, agoraToken, agoraUid, resolvedRole);
         setInRoom(true);
       } catch (err: unknown) {
         console.warn("Failed to join room:", err);
