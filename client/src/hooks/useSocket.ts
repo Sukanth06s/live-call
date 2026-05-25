@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { ActiveTranscriptionSession, RoomUser, TranscriptBlock } from "@/types";
+import { ActiveTranscriptionSession, RoomState, RoomUser, TranscriptBlock } from "@/types";
 import { formatIstDateTime } from "@/lib/time";
 
 let SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
@@ -17,6 +17,7 @@ export function useSocket(sessionToken?: string) {
   const userNameRef = useRef<string | null>(null);
   const roleRef = useRef<string>(typeof window !== "undefined" ? sessionStorage.getItem("intendedRole") || "candidate" : "candidate");
   const sessionTokenRef = useRef<string | undefined>(undefined);
+  const roomStateVersionRef = useRef(0);
   const [socketId, setSocketId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [users, setUsers] = useState<RoomUser[]>([]);
@@ -24,6 +25,8 @@ export function useSocket(sessionToken?: string) {
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
   const [activeTranscriptionSession, setActiveTranscriptionSession] = useState<ActiveTranscriptionSession | null>(null);
   const [transcriptSaveStatus, setTranscriptSaveStatus] = useState<string | null>(null);
+  const [isTranscriptionChanging, setIsTranscriptionChanging] = useState(false);
+  const [transcriptionCountdown, setTranscriptionCountdown] = useState<number | null>(null);
 
   useEffect(() => {
     if (!sessionToken) return;
@@ -39,6 +42,9 @@ export function useSocket(sessionToken?: string) {
       setCurrentRoomId(null);
       setActiveTranscriptionSession(null);
       setTranscriptSaveStatus(null);
+      setIsTranscriptionChanging(false);
+      setTranscriptionCountdown(null);
+      roomStateVersionRef.current = 0;
     }
 
     const socket = io(SOCKET_URL, {
@@ -77,13 +83,46 @@ export function useSocket(sessionToken?: string) {
       console.error(`[Socket] connect_error: ${err.message}`);
     });
 
-    socket.on("room-state", (state) => {
+    socket.on("room-state", (state: RoomState) => {
+      if (roomIdRef.current && state.roomId !== roomIdRef.current) {
+        return;
+      }
+      const version = state.roomStateVersion || 0;
+      if (version && version <= roomStateVersionRef.current) {
+        return;
+      }
+      if (version) roomStateVersionRef.current = version;
+
       console.log("[Socket] Received room-state:", state);
       setUsers(state.users);
       setBlocks(state.blocks || []);
       if (state.activeTranscriptionSession) {
         setActiveTranscriptionSession(state.activeTranscriptionSession);
       }
+      if (state.activeTranscriptionSession?.isActive || state.state === "paused" || state.state === "ended" || state.state === "waiting") {
+        setIsTranscriptionChanging(false);
+        setTranscriptionCountdown(null);
+      }
+    });
+
+    socket.on("transcription-starting", ({ countdown }: { countdown: number }) => {
+      setIsTranscriptionChanging(true);
+      setTranscriptionCountdown(countdown);
+    });
+
+    socket.on("countdown-tick", ({ countdown }: { countdown: number }) => {
+      setIsTranscriptionChanging(countdown > 0);
+      setTranscriptionCountdown(countdown > 0 ? countdown : null);
+    });
+
+    socket.on("transcription-stopped", () => {
+      setIsTranscriptionChanging(false);
+      setTranscriptionCountdown(null);
+    });
+
+    socket.on("interview-ended", () => {
+      setIsTranscriptionChanging(false);
+      setTranscriptionCountdown(null);
     });
 
     // Legacy speaking indicators - room-state or block-update will handle visual speaking states
@@ -136,14 +175,17 @@ export function useSocket(sessionToken?: string) {
           roleRef.current = role;
         }
 
-        const onRoomState = () => {
-          socketRef.current?.off("room-state", onRoomState);
+        roomStateVersionRef.current = 0;
+
+        const onJoinAck = (ack: { roomId: string }) => {
+          if (ack.roomId !== roomId) return;
+          socketRef.current?.off("join-ack", onJoinAck);
           socketRef.current?.off("join-error", onJoinError);
           resolve();
         };
 
         const onJoinError = (msg: string) => {
-          socketRef.current?.off("room-state", onRoomState);
+          socketRef.current?.off("join-ack", onJoinAck);
           socketRef.current?.off("join-error", onJoinError);
           roomIdRef.current = null;
           userNameRef.current = null;
@@ -151,7 +193,7 @@ export function useSocket(sessionToken?: string) {
           reject(new Error(msg));
         };
 
-        socketRef.current.once("room-state", onRoomState);
+        socketRef.current.on("join-ack", onJoinAck);
         socketRef.current.once("join-error", onJoinError);
 
         socketRef.current.emit("join-room", { roomId, userName, role: roleRef.current });
@@ -170,7 +212,11 @@ export function useSocket(sessionToken?: string) {
       setCurrentRoomId(null);
       setUsers([]);
       setBlocks([]);
+      setActiveTranscriptionSession(null);
       setTranscriptSaveStatus(null);
+      setIsTranscriptionChanging(false);
+      setTranscriptionCountdown(null);
+      roomStateVersionRef.current = 0;
     }
   }, []);
 
@@ -208,6 +254,8 @@ export function useSocket(sessionToken?: string) {
     currentRoomId,
     activeTranscriptionSession,
     transcriptSaveStatus,
+    isTranscriptionChanging,
+    transcriptionCountdown,
     joinRoom,
     leaveRoom,
     emitMuteToggle,
@@ -226,12 +274,14 @@ export function useSocket(sessionToken?: string) {
     }, []),
     emitStartTranscription: useCallback(() => {
       if (socketRef.current) {
+        setIsTranscriptionChanging(true);
         socketRef.current.emit("start-transcription", { roomId: roomIdRef.current });
       }
     }, []),
     emitStopTranscription: useCallback(() => {
       if (socketRef.current) {
-        socketRef.current.emit("end-interview", { roomId: roomIdRef.current });
+        setIsTranscriptionChanging(true);
+        socketRef.current.emit("stop-transcription", { roomId: roomIdRef.current });
       }
     }, []),
     emitSaveFinalTranscript: useCallback(() => {

@@ -57,4 +57,7 @@ export interface RoomState {
   roomId: string;
   users: RoomUser[];
   blocks: TranscriptBlock[];
+  activeTranscriptionSession?: ActiveTranscriptionSession;
+  roomStateVersion?: number;
+  state?: InterviewState;
 }

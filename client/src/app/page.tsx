@@ -53,6 +53,8 @@ export default function Home() {
     blocks,
     activeTranscriptionSession,
     transcriptSaveStatus,
+    isTranscriptionChanging,
+    transcriptionCountdown,
     joinRoom,
     leaveRoom: socketLeaveRoom,
     emitMuteToggle,
@@ -150,7 +152,7 @@ export default function Home() {
   // 1. Candidate-only Transcription Lifecycle
   // Only the candidate streams PCM to Deepgram; HR and Super Admin stay on Agora audio/video only.
   useEffect(() => {
-    if (inRoom && userRole === "candidate") {
+    if (inRoom && userRole === "candidate" && activeTranscriptionSession?.isActive) {
       const stream = getMediaStream();
       if (stream) {
         // Log Track State on Warm Startup
@@ -168,7 +170,7 @@ export default function Home() {
     } else {
       stopTranscription();
     }
-  }, [inRoom, userRole, getMediaStream, startTranscription, stopTranscription, getLocalTrack]);
+  }, [inRoom, userRole, activeTranscriptionSession?.isActive, getMediaStream, startTranscription, stopTranscription, getLocalTrack]);
 
   useEffect(() => {
     if (!socket) return;
@@ -381,6 +383,8 @@ export default function Home() {
       isConnected={isConnected}
       isAgoraJoined={isAgoraJoined}
       isTranscribing={activeTranscriptionSession?.isActive || false}
+      isTranscriptionChanging={isTranscriptionChanging}
+      transcriptionCountdown={transcriptionCountdown}
       onToggleMute={handleToggleMute}
       onToggleVideo={handleToggleVideo}
       onLeaveRoom={handleLeaveRoom}

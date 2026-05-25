@@ -28,6 +28,8 @@ interface RoomPageProps {
   isConnected: boolean;
   isAgoraJoined: boolean;
   isTranscribing: boolean;
+  isTranscriptionChanging?: boolean;
+  transcriptionCountdown?: number | null;
   onToggleMute: () => void;
   onToggleVideo: () => void;
   onLeaveRoom: () => void;
@@ -64,6 +66,8 @@ export default function RoomPage({
   isConnected,
   isAgoraJoined,
   isTranscribing,
+  isTranscriptionChanging = false,
+  transcriptionCountdown = null,
   onToggleMute,
   onToggleVideo,
   onLeaveRoom,
@@ -199,10 +203,11 @@ export default function RoomPage({
       return !isTranscribing ? (
         <motion.button
           onClick={onStartTranscription}
+          disabled={isTranscriptionChanging}
           whileTap={{ scale: 0.97 }}
-          className={`w-full rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 font-semibold text-white shadow-lg shadow-blue-500/20 transition-all duration-300 hover:shadow-blue-500/40 ${compact ? "px-3 py-3 text-xs" : "py-3 text-sm"}`}
+          className={`w-full rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 font-semibold text-white shadow-lg shadow-blue-500/20 transition-all duration-300 hover:shadow-blue-500/40 disabled:cursor-not-allowed disabled:opacity-60 ${compact ? "px-3 py-3 text-xs" : "py-3 text-sm"}`}
         >
-          Start Transcription
+          {isTranscriptionChanging ? (transcriptionCountdown ? `Starting in ${transcriptionCountdown}` : "Starting...") : "Start Transcription"}
         </motion.button>
       ) : (
         <div className={compact ? "grid grid-cols-[1fr_auto] gap-2" : "space-y-2"}>
@@ -218,10 +223,11 @@ export default function RoomPage({
           </div>
           <motion.button
             onClick={onStopTranscription}
+            disabled={isTranscriptionChanging}
             whileTap={{ scale: 0.97 }}
-            className={`rounded-xl border border-red-500/20 bg-red-500/10 font-semibold text-red-400 shadow-lg shadow-red-500/5 transition-all duration-300 hover:border-red-600 hover:bg-red-600 hover:text-white hover:shadow-red-500/20 ${compact ? "px-4 py-3 text-xs" : "w-full py-3 text-sm"}`}
+            className={`rounded-xl border border-red-500/20 bg-red-500/10 font-semibold text-red-400 shadow-lg shadow-red-500/5 transition-all duration-300 hover:border-red-600 hover:bg-red-600 hover:text-white hover:shadow-red-500/20 disabled:cursor-not-allowed disabled:opacity-60 ${compact ? "px-4 py-3 text-xs" : "w-full py-3 text-sm"}`}
           >
-            Stop
+            {isTranscriptionChanging ? "Stopping..." : "Stop"}
           </motion.button>
         </div>
       );
@@ -391,8 +397,9 @@ export default function RoomPage({
               onReplaceTranscript={onReplaceTranscript}
               isTranscribing={isTranscribing}
               isHr={isHr}
-              isSuperAdmin={isSuperAdmin}
+            isSuperAdmin={isSuperAdmin}
             onStopTranscription={onStopTranscription}
+            isTranscriptionChanging={isTranscriptionChanging}
             onSaveFinalTranscript={onSaveFinalTranscript}
             transcriptSaveStatus={transcriptSaveStatus}
           />

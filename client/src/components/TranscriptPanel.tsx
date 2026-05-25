@@ -16,6 +16,7 @@ interface TranscriptPanelProps {
   isHr?: boolean;
   isSuperAdmin?: boolean;
   onStopTranscription?: () => void;
+  isTranscriptionChanging?: boolean;
   onSaveFinalTranscript?: () => void;
   transcriptSaveStatus?: string | null;
 }
@@ -28,6 +29,7 @@ export default function TranscriptPanel({
   isHr = false,
   isSuperAdmin = false,
   onStopTranscription,
+  isTranscriptionChanging = false,
   onSaveFinalTranscript,
   transcriptSaveStatus,
 }: TranscriptPanelProps) {
@@ -129,9 +131,10 @@ export default function TranscriptPanel({
           <motion.button
             whileTap={{ scale: 0.95 }}
             onClick={onStopTranscription}
-            className="rounded-lg border border-red-500/30 bg-red-500/15 px-2.5 py-1 text-[10px] font-bold uppercase text-red-400 shadow-md shadow-red-500/5 transition-all duration-300 hover:border-red-600 hover:bg-red-600 hover:text-white hover:shadow-red-500/25 sm:ml-2 sm:px-3.5 sm:text-xs"
+            disabled={isTranscriptionChanging}
+            className="rounded-lg border border-red-500/30 bg-red-500/15 px-2.5 py-1 text-[10px] font-bold uppercase text-red-400 shadow-md shadow-red-500/5 transition-all duration-300 hover:border-red-600 hover:bg-red-600 hover:text-white hover:shadow-red-500/25 disabled:cursor-not-allowed disabled:opacity-60 sm:ml-2 sm:px-3.5 sm:text-xs"
           >
-            Stop Transcription
+            {isTranscriptionChanging ? "Stopping..." : "Stop Transcription"}
           </motion.button>
         )}
 

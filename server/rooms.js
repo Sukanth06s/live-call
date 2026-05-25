@@ -21,6 +21,7 @@ function createRoom(roomId) {
         targetSpeakerId: null,
         startedAt: null
       },
+      roomStateVersion: 0,
       
       blocks: [],                 // Array of TranscriptBlocks
       activeSpeakers: new Map(),  // userName -> { blockId, committedSegments, liveSegment }
@@ -129,7 +130,15 @@ function getProjectedRoomState(roomId, requestorRole) {
     users: visibleUsers,
     blocks: room.blocks,
     activeTranscriptionSession: room.activeTranscriptionSession,
+    roomStateVersion: room.roomStateVersion,
   };
+}
+
+function bumpRoomStateVersion(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return 0;
+  room.roomStateVersion = (room.roomStateVersion || 0) + 1;
+  return room.roomStateVersion;
 }
 
 // Get all socket IDs in a room, categorizing them for targeted broadcast
@@ -262,6 +271,7 @@ module.exports = {
   getRoom,
   getAllRooms,
   getProjectedRoomState,
+  bumpRoomStateVersion,
   getRoomSocketsByRole,
   toggleMute,
   toggleVideo,

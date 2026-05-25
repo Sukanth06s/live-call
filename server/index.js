@@ -22,6 +22,7 @@ const {
   leaveRoom,
   getRoom,
   getProjectedRoomState,
+  bumpRoomStateVersion,
   getRoomSocketsByRole,
   toggleMute,
   toggleVideo,
@@ -55,6 +56,7 @@ app.use(express.json());
 
 const speakerTimeouts = new Map();
 const activeDeepgramConnections = new Map(); // roomId -> { dgConnection, isDeepgramConnecting, isDgOpen, audioQueue }
+const transcriptionCountdowns = new Map(); // roomId -> countdown interval
 const allowedRoles = new Set(["candidate", "hr", "super_admin"]);
 const activeUserSockets = new Map(); // Supabase auth user id -> active socket id
 
@@ -144,6 +146,7 @@ function getBearerToken(req) {
 // Helper to broadcast projected room state based on roles
 const broadcastProjectedRoomState = (roomId) => {
   if (!roomId) return;
+  bumpRoomStateVersion(roomId);
   const { regular, superAdmin } = getRoomSocketsByRole(roomId);
   
   // Broadcast to Regular users (Candidate, HR) - no hidden observers
@@ -162,6 +165,64 @@ const broadcastProjectedRoomState = (roomId) => {
     });
   }
 };
+
+function isSocketInRoom(socket, roomId) {
+  return Boolean(roomId && socket.data.roomId === roomId);
+}
+
+function canManageTranscript(socket) {
+  return socket.data.role === "hr" || socket.data.role === "candidate";
+}
+
+function clearCountdown(roomId) {
+  const interval = transcriptionCountdowns.get(roomId);
+  if (interval) {
+    clearInterval(interval);
+    transcriptionCountdowns.delete(roomId);
+  }
+}
+
+function clearSpeakerTimeouts(roomId) {
+  const prefix = `${roomId}-`;
+  for (const [key, timeout] of speakerTimeouts) {
+    if (key.startsWith(prefix)) {
+      clearTimeout(timeout);
+      speakerTimeouts.delete(key);
+    }
+  }
+}
+
+function closeDeepgramForRoom(roomId, expectedConnection = null) {
+  const dgState = activeDeepgramConnections.get(roomId);
+  if (!dgState) return;
+  if (expectedConnection && dgState.dgConnection !== expectedConnection) return;
+
+  if (dgState.dgConnection) {
+    try { dgState.dgConnection.requestClose(); } catch (e) {}
+  }
+  dgState.dgConnection = null;
+  dgState.isDeepgramConnecting = false;
+  dgState.isDgOpen = false;
+  dgState.audioQueue = [];
+  activeDeepgramConnections.delete(roomId);
+}
+
+function stopTranscriptionForRoom(roomId, { emitStopped = true } = {}) {
+  const room = getRoom(roomId);
+  if (!room) return false;
+
+  clearCountdown(roomId);
+  room.state = "paused";
+  room.activeTranscriptionSession.isActive = false;
+  room.activeTranscriptionSession.startedAt = null;
+  finalizeAllActiveSpeakers(roomId);
+  closeDeepgramForRoom(roomId);
+  clearSpeakerTimeouts(roomId);
+
+  if (emitStopped) io.to(roomId).emit("transcription-stopped");
+  broadcastProjectedRoomState(roomId);
+  return true;
+}
 
 function getCandidateTranscriptBlocks(room) {
   const candidateName = room?.candidateUser?.name || room?.lastCandidateUser?.name;
@@ -478,10 +539,14 @@ io.on("connection", (socket) => {
   if (existingSocketId && existingSocketId !== socket.id) {
     const existingSocket = io.sockets.sockets.get(existingSocketId);
     if (existingSocket) {
-      existingSocket.data.isBeingReplaced = true;
-      existingSocket.data.replacedBySocketId = socket.id;
-      existingSocket.emit("force-logout", "This account was signed in from another device. You have been logged out here.");
-      existingSocket.disconnect(true);
+      if (existingSocket.data.roomId) {
+        existingSocket.data.pendingReplacementSocketId = socket.id;
+      } else {
+        existingSocket.data.isBeingReplaced = true;
+        existingSocket.data.replacedBySocketId = socket.id;
+        existingSocket.emit("force-logout", "This account was signed in from another device. You have been logged out here.");
+        existingSocket.disconnect(true);
+      }
     }
   }
   activeUserSockets.set(socket.data.userId, socket.id);
@@ -538,6 +603,8 @@ io.on("connection", (socket) => {
           existingRoomSocket.data.replacedBySocketId = socket.id;
           existingRoomSocket.leave(roomId);
           existingRoomSocket.data.roomId = null;
+          existingRoomSocket.emit("force-logout", "This account was signed in from another device. You have been logged out here.");
+          existingRoomSocket.disconnect(true);
         }
       }
     }
@@ -553,60 +620,85 @@ io.on("connection", (socket) => {
     socket.join(roomId);
 
     await hydrateRoomWithLatestCandidateTranscript(roomId);
-    
+
+    socket.emit("join-ack", { roomId, role: requestedRole });
     broadcastProjectedRoomState(roomId);
   });
 
   socket.on("start-transcription", async ({ roomId }) => {
+    if (!isSocketInRoom(socket, roomId)) return;
     if (socket.data.role !== "hr") {
       console.warn(`[Security] User ${socket.data.email} attempted to start transcription without HR role.`);
       return;
     }
     
     const room = getRoom(roomId);
-    if (!room || room.state === "transcribing") return;
+    if (!room || room.state === "active" || room.state === "transcribing" || room.activeTranscriptionSession.isActive || transcriptionCountdowns.has(roomId)) return;
+    if (!room.candidateUser) {
+      socket.emit("transcript-save-error", "Candidate must be in the room before transcription can start.");
+      return;
+    }
 
     room.state = "active";
     room.activeTranscriptionSession.isActive = false;
     room.activeTranscriptionSession.startedBy = socket.data.userId;
     room.activeTranscriptionSession.targetSpeakerId = room.candidateUser?.id;
 
-    // Soft Recovery: Immediately insert the interview row
+    // Soft Recovery: Immediately create or reactivate the interview row.
     try {
-      const { data, error } = await supabaseAdmin
-        .from('interviews')
-        .insert([{
-          room_id: roomId,
-          hr_user_id: socket.data.userId,
-          candidate_user_id: room.candidateUser?.authUserId || null,
-          status: 'active',
-          started_at: new Date().toISOString()
-        }])
-        .select()
-        .single();
-      
-      if (!error && data) {
-        room.interviewSessionId = data.id;
-        console.log(`[DB] Created interview session: ${data.id}`);
+      if (!room.interviewSessionId) {
+        const { data, error } = await supabaseAdmin
+          .from('interviews')
+          .insert([{
+            room_id: roomId,
+            hr_user_id: socket.data.userId,
+            candidate_user_id: room.candidateUser.authUserId,
+            status: 'active',
+            started_at: new Date().toISOString()
+          }])
+          .select()
+          .single();
+
+        if (!error && data) {
+          room.interviewSessionId = data.id;
+          console.log(`[DB] Created interview session: ${data.id}`);
+        } else {
+          console.error("[DB Error] Failed to create interview:", error);
+        }
       } else {
-        console.error("[DB Error] Failed to create interview:", error);
+        const { error } = await supabaseAdmin
+          .from('interviews')
+          .update({
+            status: 'active',
+            hr_user_id: socket.data.userId,
+            candidate_user_id: room.candidateUser.authUserId,
+            ended_at: null,
+          })
+          .eq("id", room.interviewSessionId);
+        if (error) console.error("[DB Error] Failed to reactivate interview:", error);
       }
     } catch (e) {
-      console.error("[DB Catch] Error creating interview:", e);
+      console.error("[DB Catch] Error creating/reactivating interview:", e);
     }
 
     io.to(roomId).emit("transcription-starting", { countdown: 10 });
     
     let countdown = 10;
     const interval = setInterval(() => {
+      const activeRoom = getRoom(roomId);
+      if (!activeRoom || activeRoom.state !== "active") {
+        clearCountdown(roomId);
+        return;
+      }
+
       countdown--;
       io.to(roomId).emit("countdown-tick", { countdown });
       
       if (countdown <= 0) {
-        clearInterval(interval);
-        room.state = "transcribing";
-        room.activeTranscriptionSession.isActive = true;
-        room.activeTranscriptionSession.startedAt = Date.now();
+        clearCountdown(roomId);
+        activeRoom.state = "transcribing";
+        activeRoom.activeTranscriptionSession.isActive = true;
+        activeRoom.activeTranscriptionSession.startedAt = Date.now();
         broadcastProjectedRoomState(roomId);
 
         // Open Deepgram Session at room scope
@@ -628,7 +720,7 @@ io.on("connection", (socket) => {
             console.log(`[Deepgram] Starting live transcription for room ${roomId}`);
             const dgConnection = deepgram.listen.live({ model: "nova-2", smart_format: true, encoding: "linear16", sample_rate: 16000 });
             dgState.dgConnection = dgConnection;
-            setupDeepgramEvents(dgConnection, roomId, room.candidateUser?.name || "Candidate", room.candidateUser?.id);
+            setupDeepgramEvents(dgConnection, roomId, activeRoom.candidateUser?.name || "Candidate", activeRoom.candidateUser?.id);
           } catch (err) {
             console.error("[Deepgram] Start failed:", err);
             dgState.isDeepgramConnecting = false;
@@ -637,29 +729,54 @@ io.on("connection", (socket) => {
         }
       }
     }, 1000);
+    transcriptionCountdowns.set(roomId, interval);
   });
 
   socket.on("end-interview", async ({ roomId }) => {
+    if (!isSocketInRoom(socket, roomId)) return;
     if (socket.data.role !== "hr" && socket.data.role !== "super_admin") return;
     
     const room = getRoom(roomId);
     if (!room) return;
 
+    clearCountdown(roomId);
     room.state = "ended";
     room.activeTranscriptionSession.isActive = false;
     finalizeAllActiveSpeakers(roomId);
+    clearSpeakerTimeouts(roomId);
 
-    const dgState = activeDeepgramConnections.get(roomId);
-    if (dgState && dgState.dgConnection) {
-      try { dgState.dgConnection.requestClose(); } catch (e) {}
-      activeDeepgramConnections.delete(roomId);
-    }
+    closeDeepgramForRoom(roomId);
 
     io.to(roomId).emit("interview-ended");
     broadcastProjectedRoomState(roomId);
   });
 
+  socket.on("stop-transcription", async ({ roomId }) => {
+    if (!isSocketInRoom(socket, roomId)) return;
+    if (socket.data.role !== "hr") {
+      console.warn(`[Security] User ${socket.data.email} attempted to stop transcription without HR role.`);
+      return;
+    }
+
+    const stopped = stopTranscriptionForRoom(roomId);
+    if (!stopped) return;
+
+    const room = getRoom(roomId);
+    if (room?.interviewSessionId) {
+      try {
+        const { error } = await supabaseAdmin
+          .from("interviews")
+          .update({ status: "paused", updated_at: new Date().toISOString() })
+          .eq("id", room.interviewSessionId);
+        if (error) console.error("[DB Error] Failed to pause interview:", error);
+      } catch (err) {
+        console.error("[DB Catch] Error pausing interview:", err);
+      }
+    }
+  });
+
   socket.on("save-final-transcript", async ({ roomId }) => {
+    if (!isSocketInRoom(socket, roomId)) return;
     if (socket.data.role !== "hr") {
       socket.emit("transcript-save-error", "Only HR can save the final transcript.");
       return;
@@ -684,6 +801,7 @@ io.on("connection", (socket) => {
   // STRICT PCM ROUTING AUTHORITY
   socket.on("audio-chunk", ({ roomId, audio }) => {
     const activeRoomId = roomId || socket.data.roomId;
+    if (!isSocketInRoom(socket, activeRoomId)) return;
     if (!activeRoomId) return;
     
     const room = getRoom(activeRoomId);
@@ -802,41 +920,53 @@ io.on("connection", (socket) => {
 
     dg.on(LiveTranscriptionEvents.Close, () => {
       console.log(`[Deepgram] Connection closed for room: ${roomId}`);
-      activeDeepgramConnections.delete(roomId);
+      const dgState = activeDeepgramConnections.get(roomId);
+      if (dgState?.dgConnection === dg) {
+        activeDeepgramConnections.delete(roomId);
+      }
     });
 
     dg.on(LiveTranscriptionEvents.Error, (err) => {
       console.error(`[Deepgram] Connection error for room ${roomId}:`, err);
-      activeDeepgramConnections.delete(roomId);
+      const dgState = activeDeepgramConnections.get(roomId);
+      if (dgState?.dgConnection === dg) {
+        activeDeepgramConnections.delete(roomId);
+      }
     });
   }
 
   socket.on("toggle-mute", ({ roomId, isMuted }) => {
+    if (!isSocketInRoom(socket, roomId)) return;
     toggleMute(roomId, socket.id, isMuted);
     broadcastProjectedRoomState(roomId);
   });
 
   socket.on("toggle-video", ({ roomId, isVideoEnabled }) => {
+    if (!isSocketInRoom(socket, roomId)) return;
     toggleVideo(roomId, socket.id, isVideoEnabled);
     broadcastProjectedRoomState(roomId);
   });
 
 
   socket.on("transcript-edit", ({ roomId, blockId, content }) => {
+    if (!isSocketInRoom(socket, roomId) || !canManageTranscript(socket)) return;
     updateBlockContent(roomId, blockId, content);
     broadcastProjectedRoomState(roomId);
   });
 
   socket.on("clear-transcript", ({ roomId }) => {
+    if (!isSocketInRoom(socket, roomId) || !canManageTranscript(socket)) return;
     const room = getRoom(roomId);
     if (room) {
       room.blocks = [];
       room.activeSpeakers.clear();
+      clearSpeakerTimeouts(roomId);
       broadcastProjectedRoomState(roomId);
     }
   });
 
   socket.on("transcript-replace", ({ roomId, content }) => {
+    if (!isSocketInRoom(socket, roomId) || !canManageTranscript(socket)) return;
     const room = getRoom(roomId);
     if (room) {
       const crypto = require('crypto');
@@ -859,6 +989,7 @@ io.on("connection", (socket) => {
       };
       room.blocks = [newBlock];
       room.activeSpeakers.clear();
+      clearSpeakerTimeouts(roomId);
       broadcastProjectedRoomState(roomId);
     }
   });
@@ -881,9 +1012,7 @@ function handleLeave(socket) {
     const isCurrentHrSocket = room?.hrUser?.id === socket.id;
 
     if (socket.data.isBeingReplaced) {
-      leaveRoom(roomId, socket.id);
       socket.leave(roomId);
-      broadcastProjectedRoomState(roomId);
       return;
     }
 
@@ -896,6 +1025,7 @@ function handleLeave(socket) {
 
     if (room && role === "hr" && isCurrentHrSocket) {
       console.log(`[Socket] Interviewer (HR) left/disconnected room ${roomId}. Closing room.`);
+      clearCountdown(roomId);
       
       // Notify remaining participants in the room
       io.to(roomId).emit("room-closed", "The Interviewer (HR) has disconnected. The session is closed.");
@@ -909,11 +1039,8 @@ function handleLeave(socket) {
       }
       
       // Clean up Deepgram connection
-      const dgState = activeDeepgramConnections.get(roomId);
-      if (dgState && dgState.dgConnection) {
-        try { dgState.dgConnection.requestClose(); } catch (e) {}
-        activeDeepgramConnections.delete(roomId);
-      }
+      closeDeepgramForRoom(roomId);
+      clearSpeakerTimeouts(roomId);
       
       // Evict all sockets in that room
       const { regular, superAdmin } = getRoomSocketsByRole(roomId);
@@ -930,14 +1057,16 @@ function handleLeave(socket) {
       return;
     }
 
+    if (room && role === "candidate" && (room.activeTranscriptionSession.isActive || transcriptionCountdowns.has(roomId))) {
+      stopTranscriptionForRoom(roomId);
+    }
+
     finalizeAllActiveSpeakers(roomId);
     const updatedRoom = leaveRoom(roomId, socket.id);
     if (!updatedRoom) {
-      const dgState = activeDeepgramConnections.get(roomId);
-      if (dgState && dgState.dgConnection) {
-        try { dgState.dgConnection.requestClose(); } catch (e) {}
-        activeDeepgramConnections.delete(roomId);
-      }
+      clearCountdown(roomId);
+      closeDeepgramForRoom(roomId);
+      clearSpeakerTimeouts(roomId);
     } else {
       broadcastProjectedRoomState(roomId);
     }
