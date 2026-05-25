@@ -158,9 +158,10 @@ const broadcastProjectedRoomState = (roomId) => {
 };
 
 function getCandidateTranscriptBlocks(room) {
+  const candidateName = room?.candidateUser?.name || room?.lastCandidateUser?.name;
   return (room?.blocks || []).filter((block) => {
     const content = (block.content || "").trim();
-    return content && (block.speakerRole === "candidate" || block.speakerName === room?.candidateUser?.name);
+    return content && (block.speakerRole === "candidate" || block.speakerName === candidateName);
   });
 }
 
@@ -176,6 +177,7 @@ function toIsoFromMillis(value) {
 }
 
 function mapFinalTranscriptForInsert(room, interviewId, finalTranscript) {
+  const candidateUser = room.candidateUser || room.lastCandidateUser;
   const candidateBlocks = getCandidateTranscriptBlocks(room);
   const startedAt = candidateBlocks[0]?.createdAt ? toIsoFromMillis(candidateBlocks[0].createdAt) : new Date().toISOString();
   const endedAt = candidateBlocks[candidateBlocks.length - 1]?.updatedAt
@@ -185,8 +187,8 @@ function mapFinalTranscriptForInsert(room, interviewId, finalTranscript) {
   return {
     id: crypto.randomUUID(),
     interview_id: interviewId,
-    speaker: room.candidateUser?.name || "Candidate",
-    speaker_user_id: room.candidateUser?.authUserId || null,
+    speaker: candidateUser?.name || "Candidate",
+    speaker_user_id: candidateUser?.authUserId || null,
     content: finalTranscript,
     confidence: 1.0,
     version: candidateBlocks.reduce((max, block) => Math.max(max, block.version || 1), 1),
@@ -196,14 +198,15 @@ function mapFinalTranscriptForInsert(room, interviewId, finalTranscript) {
 }
 
 async function persistRoomTranscript(room, { savedByUserId, reason = "manual" } = {}) {
-  if (!room?.candidateUser?.authUserId) {
+  const candidateUser = room?.candidateUser || room?.lastCandidateUser;
+  if (!candidateUser?.authUserId) {
     throw new Error("Cannot persist transcript without a candidate user");
   }
 
   finalizeAllActiveSpeakers(room.roomId);
 
-  const candidateUserId = room.candidateUser.authUserId;
-  const hrUserId = room.hrUser?.authUserId || savedByUserId || null;
+  const candidateUserId = candidateUser.authUserId;
+  const hrUserId = room.hrUser?.authUserId || room.lastHrUser?.authUserId || savedByUserId || null;
   const finalTranscript = buildFinalTranscript(room);
   const now = new Date().toISOString();
 
@@ -843,15 +846,28 @@ function handleLeave(socket) {
   const role = socket.data.role;
   if (roomId) {
     const room = getRoom(roomId);
-    if (room && role === "hr") {
+    const isCurrentHrSocket = room?.hrUser?.id === socket.id;
+
+    if (room && role === "hr" && !isCurrentHrSocket) {
+      leaveRoom(roomId, socket.id);
+      socket.leave(roomId);
+      broadcastProjectedRoomState(roomId);
+      return;
+    }
+
+    if (room && role === "hr" && isCurrentHrSocket) {
       console.log(`[Socket] Interviewer (HR) left/disconnected room ${roomId}. Closing room.`);
       
       // Notify remaining participants in the room
       io.to(roomId).emit("room-closed", "The Interviewer (HR) has disconnected. The session is closed.");
       
-      persistRoomTranscript(room, { savedByUserId: socket.data.userId, reason: "hr-disconnect" })
-        .then(() => console.log(`[DB] Successfully closed session on HR disconnect: ${room.interviewSessionId}`))
-        .catch(err => console.error("[DB Error] HR disconnect persistence failed:", err));
+      if ((room.blocks || []).some((block) => (block.content || "").trim()) && (room.candidateUser || room.lastCandidateUser)) {
+        persistRoomTranscript(room, { savedByUserId: socket.data.userId, reason: "hr-disconnect" })
+          .then(() => console.log(`[DB] Successfully closed session on HR disconnect: ${room.interviewSessionId}`))
+          .catch(err => console.error("[DB Error] HR disconnect persistence failed:", err));
+      } else {
+        console.log(`[DB] Skipped HR disconnect persistence for room ${roomId}: no candidate transcript to save.`);
+      }
       
       // Clean up Deepgram connection
       const dgState = activeDeepgramConnections.get(roomId);

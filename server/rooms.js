@@ -11,6 +11,8 @@ function createRoom(roomId) {
       
       candidateUser: null,
       hrUser: null,
+      lastCandidateUser: null,
+      lastHrUser: null,
       hiddenObservers: new Map(), // socketId -> RoomUser
       
       activeTranscriptionSession: {
@@ -51,8 +53,10 @@ function joinRoom(roomId, userId, userName, authUserId, role) {
 
   if (role === "candidate") {
     room.candidateUser = user;
+    room.lastCandidateUser = user;
   } else if (role === "hr") {
     room.hrUser = user;
+    room.lastHrUser = user;
   } else if (role === "super_admin") {
     if (existingUser?.id && existingUser.id !== userId) {
       room.hiddenObservers.delete(existingUser.id);
@@ -66,8 +70,14 @@ function joinRoom(roomId, userId, userName, authUserId, role) {
 function leaveRoom(roomId, userId) {
   const room = rooms.get(roomId);
   if (room) {
-    if (room.candidateUser?.id === userId) room.candidateUser = null;
-    if (room.hrUser?.id === userId) room.hrUser = null;
+    if (room.candidateUser?.id === userId) {
+      room.lastCandidateUser = room.candidateUser;
+      room.candidateUser = null;
+    }
+    if (room.hrUser?.id === userId) {
+      room.lastHrUser = room.hrUser;
+      room.hrUser = null;
+    }
     room.hiddenObservers.delete(userId);
     
     // Clean up empty rooms
