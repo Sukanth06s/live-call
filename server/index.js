@@ -478,6 +478,8 @@ io.on("connection", (socket) => {
   if (existingSocketId && existingSocketId !== socket.id) {
     const existingSocket = io.sockets.sockets.get(existingSocketId);
     if (existingSocket) {
+      existingSocket.data.isBeingReplaced = true;
+      existingSocket.data.replacedBySocketId = socket.id;
       existingSocket.emit("force-logout", "This account was signed in from another device. You have been logged out here.");
       existingSocket.disconnect(true);
     }
@@ -497,7 +499,7 @@ io.on("connection", (socket) => {
       if (
         requestedRole === "candidate" &&
         room.candidateUser &&
-        room.candidateUser.id !== socket.id
+        room.candidateUser.authUserId !== socket.data.userId
       ) {
         socket.emit("join-error", "This room is already full: A Candidate has already joined this session.");
         return;
@@ -505,15 +507,37 @@ io.on("connection", (socket) => {
       if (
         requestedRole === "hr" &&
         room.hrUser &&
-        room.hrUser.id !== socket.id
+        room.hrUser.authUserId !== socket.data.userId
       ) {
         socket.emit("join-error", "This room is already full: An HR Interviewer has already joined this session.");
         return;
       }
       if (requestedRole === "super_admin" && room.hiddenObservers.size > 0) {
-        if (!room.hiddenObservers.has(socket.id)) {
+        const existingObserver = Array.from(room.hiddenObservers.values()).find(
+          (observer) => observer.authUserId === socket.data.userId
+        );
+        if (!existingObserver) {
           socket.emit("join-error", "This room is already full: A Super Admin Observer has already joined this session.");
           return;
+        }
+      }
+    }
+
+    if (room) {
+      const existingSocketIdForRole =
+        requestedRole === "candidate"
+          ? room.candidateUser?.id
+          : requestedRole === "hr"
+          ? room.hrUser?.id
+          : Array.from(room.hiddenObservers.values()).find((observer) => observer.authUserId === socket.data.userId)?.id;
+
+      if (existingSocketIdForRole && existingSocketIdForRole !== socket.id) {
+        const existingRoomSocket = io.sockets.sockets.get(existingSocketIdForRole);
+        if (existingRoomSocket) {
+          existingRoomSocket.data.isBeingReplaced = true;
+          existingRoomSocket.data.replacedBySocketId = socket.id;
+          existingRoomSocket.leave(roomId);
+          existingRoomSocket.data.roomId = null;
         }
       }
     }
@@ -855,6 +879,13 @@ function handleLeave(socket) {
   if (roomId) {
     const room = getRoom(roomId);
     const isCurrentHrSocket = room?.hrUser?.id === socket.id;
+
+    if (socket.data.isBeingReplaced) {
+      leaveRoom(roomId, socket.id);
+      socket.leave(roomId);
+      broadcastProjectedRoomState(roomId);
+      return;
+    }
 
     if (room && role === "hr" && !isCurrentHrSocket) {
       leaveRoom(roomId, socket.id);

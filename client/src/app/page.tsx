@@ -239,9 +239,6 @@ export default function Home() {
         let agoraUid: number | undefined;
         if (!agoraToken) {
           try {
-            if (!socketId) {
-              throw new Error("Socket identity is not ready yet");
-            }
             let socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
             if (socketUrl && !socketUrl.startsWith("http://") && !socketUrl.startsWith("https://")) {
               socketUrl = `https://${socketUrl}`;
@@ -254,11 +251,22 @@ export default function Home() {
                 Authorization: `Bearer ${accessToken}`,
               },
             });
+            if (!res.ok) {
+              const errorText = await res.text();
+              throw new Error(`Agora token request failed (${res.status}): ${errorText}`);
+            }
             const data = await res.json();
+            if (!data.token || data.uid === undefined || data.uid === null) {
+              throw new Error("Agora token response did not include token and uid");
+            }
             agoraToken = data.token;
             agoraUid = typeof data.uid === "number" ? data.uid : Number(data.uid);
+            if (!Number.isFinite(agoraUid)) {
+              throw new Error("Agora token response included an invalid uid");
+            }
           } catch (e) {
             console.error("Auto-token fetch failed:", e);
+            throw e;
           }
         }
 
@@ -273,7 +281,7 @@ export default function Home() {
         stopTranscription();
       }
     },
-    [accessToken, authorizedRole, joinRoom, joinChannel, socketId, socketLeaveRoom, leaveChannel, stopTranscription]
+    [accessToken, authorizedRole, joinRoom, joinChannel, socketLeaveRoom, leaveChannel, stopTranscription]
   );
 
   const handleLeaveRoom = useCallback(async () => {
