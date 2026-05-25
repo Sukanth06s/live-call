@@ -147,11 +147,10 @@ export default function Home() {
     };
   }, [accessToken, sessionEmail]);
 
-  // 1. Permanent Transcription Lifecycle
-  // This effect manages the absolute clean construction and teardown of the audio pipeline.
-  // It is completely decoupled from mute states to ensure the AudioWorklet graph stays warm and active.
+  // 1. Candidate-only Transcription Lifecycle
+  // Only the candidate streams PCM to Deepgram; HR and Super Admin stay on Agora audio/video only.
   useEffect(() => {
-    if (inRoom) {
+    if (inRoom && userRole === "candidate") {
       const stream = getMediaStream();
       if (stream) {
         // Log Track State on Warm Startup
@@ -169,7 +168,7 @@ export default function Home() {
     } else {
       stopTranscription();
     }
-  }, [inRoom, getMediaStream, startTranscription, stopTranscription, getLocalTrack]);
+  }, [inRoom, userRole, getMediaStream, startTranscription, stopTranscription, getLocalTrack]);
 
   useEffect(() => {
     if (!socket) return;

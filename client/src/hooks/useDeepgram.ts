@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useCallback, useState } from "react";
+import { useRef, useCallback, useEffect, useState } from "react";
 
 interface UseDeepgramOptions {
   socket: {
@@ -16,7 +16,16 @@ export function useDeepgram({ socket, roomId, userName }: UseDeepgramOptions) {
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const workletLoadedRef = useRef<boolean>(false);
+  const socketRef = useRef(socket);
+  const roomIdRef = useRef(roomId);
+  const userNameRef = useRef(userName);
   const [isTranscribing, setIsTranscribing] = useState(false);
+
+  useEffect(() => {
+    socketRef.current = socket;
+    roomIdRef.current = roomId;
+    userNameRef.current = userName;
+  }, [socket, roomId, userName]);
 
   const stopTranscription = useCallback(() => {
     if (sourceRef.current) {
@@ -112,14 +121,18 @@ export function useDeepgram({ socket, roomId, userName }: UseDeepgramOptions) {
             lastHeartbeat = now;
           }
 
-          if (socket && socket.connected) {
-            console.log("[PCM SENT]", pcmBuffer.byteLength);
-            socket.emit("audio-chunk", { 
-              roomId, 
-              userName,
-              audio: pcmBuffer,
-              sampleRate: audioContext.sampleRate
-            });
+          const activeSocket = socketRef.current;
+          if (activeSocket?.connected) {
+            try {
+              activeSocket.emit("audio-chunk", {
+                roomId: roomIdRef.current,
+                userName: userNameRef.current,
+                audio: pcmBuffer,
+                sampleRate: audioContext.sampleRate
+              });
+            } catch (err) {
+              console.warn("[Deepgram Proxy] Dropped PCM chunk because socket is unavailable:", err);
+            }
           }
         }
       };
@@ -140,7 +153,7 @@ export function useDeepgram({ socket, roomId, userName }: UseDeepgramOptions) {
     } catch (err) {
       console.error("[Deepgram Proxy] Failed to start/rebuild AudioWorklet graph:", err);
     }
-  }, [socket, roomId, userName, stopTranscription]);
+  }, [stopTranscription]);
 
   return {
     startTranscription,
@@ -148,4 +161,3 @@ export function useDeepgram({ socket, roomId, userName }: UseDeepgramOptions) {
     isTranscribing,
   };
 }
-
