@@ -22,6 +22,7 @@ export function useSocket(sessionToken?: string) {
   const [blocks, setBlocks] = useState<TranscriptBlock[]>([]);
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
   const [activeTranscriptionSession, setActiveTranscriptionSession] = useState<ActiveTranscriptionSession | null>(null);
+  const [transcriptSaveStatus, setTranscriptSaveStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sessionToken) return;
@@ -36,6 +37,7 @@ export function useSocket(sessionToken?: string) {
       setBlocks([]);
       setCurrentRoomId(null);
       setActiveTranscriptionSession(null);
+      setTranscriptSaveStatus(null);
     }
 
     const socket = io(SOCKET_URL, {
@@ -107,6 +109,15 @@ export function useSocket(sessionToken?: string) {
       });
     });
 
+    socket.on("transcript-saved", (result: { savedAt?: string; blockCount?: number }) => {
+      const savedAt = result.savedAt ? new Date(result.savedAt).toLocaleString() : new Date().toLocaleString();
+      setTranscriptSaveStatus(`Saved ${result.blockCount ?? 0} block(s) at ${savedAt}`);
+    });
+
+    socket.on("transcript-save-error", (message: string) => {
+      setTranscriptSaveStatus(message || "Could not save transcript.");
+    });
+
     return () => {
       socket.disconnect();
       if (socketRef.current === socket) {
@@ -158,6 +169,7 @@ export function useSocket(sessionToken?: string) {
       setCurrentRoomId(null);
       setUsers([]);
       setBlocks([]);
+      setTranscriptSaveStatus(null);
     }
   }, []);
 
@@ -194,6 +206,7 @@ export function useSocket(sessionToken?: string) {
     blocks,
     currentRoomId,
     activeTranscriptionSession,
+    transcriptSaveStatus,
     joinRoom,
     leaveRoom,
     emitMuteToggle,
@@ -218,6 +231,12 @@ export function useSocket(sessionToken?: string) {
     emitStopTranscription: useCallback(() => {
       if (socketRef.current) {
         socketRef.current.emit("end-interview", { roomId: roomIdRef.current });
+      }
+    }, []),
+    emitSaveFinalTranscript: useCallback(() => {
+      if (socketRef.current) {
+        setTranscriptSaveStatus("Saving transcript...");
+        socketRef.current.emit("save-final-transcript", { roomId: roomIdRef.current });
       }
     }, []),
   };

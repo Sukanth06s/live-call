@@ -45,6 +45,11 @@ export interface TranscriptBlock {
   updatedAt: number;
   editableBy: string[];    // Array of stable usernames allowed to edit
   roomId: string;
+  restoredFromHistory?: boolean;
+  sourceInterviewId?: string;
+  sourceSavedAt?: string;
+  sourceHrUserId?: string;
+  sourceHrName?: string;
 }
 
 export interface RoomState {

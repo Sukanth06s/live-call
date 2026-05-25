@@ -15,6 +15,8 @@ interface TranscriptPanelProps {
   isHr?: boolean;
   isSuperAdmin?: boolean;
   onStopTranscription?: () => void;
+  onSaveFinalTranscript?: () => void;
+  transcriptSaveStatus?: string | null;
 }
 
 export default function TranscriptPanel({
@@ -25,6 +27,8 @@ export default function TranscriptPanel({
   isHr = false,
   isSuperAdmin = false,
   onStopTranscription,
+  onSaveFinalTranscript,
+  transcriptSaveStatus,
 }: TranscriptPanelProps) {
   const candidateScrollRef = useRef<HTMLDivElement>(null);
   
@@ -55,6 +59,11 @@ export default function TranscriptPanel({
   const candidateBlocks = blocks.filter(
     (b) => b.speakerRole === "candidate" || (!b.speakerRole && b.speakerName !== "HR" && b.speakerName !== "Interviewer")
   );
+  const restoredSource = candidateBlocks.find((b) => b.restoredFromHistory);
+  const restoredSourceLabel =
+    restoredSource?.sourceSavedAt
+      ? `Previous transcript saved by ${restoredSource.sourceHrName || "HR"} on ${new Date(restoredSource.sourceSavedAt).toLocaleString()}`
+      : null;
 
   // Auto-scroll panels
   useEffect(() => {
@@ -159,6 +168,20 @@ export default function TranscriptPanel({
             {/* Actions Bar */}
             {!isSuperAdmin && candidateBlocks.length > 0 && !isEditing && (
               <div className="flex flex-wrap items-center gap-2">
+                {isHr && onSaveFinalTranscript && (
+                  <button
+                    onClick={onSaveFinalTranscript}
+                    className="flex items-center gap-1 rounded-lg border border-blue-500/20 bg-blue-500/10 px-2.5 py-1.5 text-[10px] font-bold uppercase text-blue-300 transition-all hover:bg-blue-500 hover:text-white sm:px-3 sm:text-[11px]"
+                    title="Save final transcript under this candidate"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M17 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V7l-4-4z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M7 3v6h8V3M7 21v-8h10v8" />
+                    </svg>
+                    <span className="hidden sm:inline">Save Final</span>
+                    <span className="sm:hidden">Save</span>
+                  </button>
+                )}
                 <button
                   onClick={handleStartOverallEdit}
                   className="flex items-center gap-1 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] font-bold uppercase text-emerald-400 transition-all hover:bg-emerald-500 hover:text-white sm:px-3 sm:text-[11px]"
@@ -189,6 +212,16 @@ export default function TranscriptPanel({
 
           {/* Box Body */}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#07070a]/40 p-3 sm:p-4 lg:p-5">
+            {(restoredSourceLabel || transcriptSaveStatus) && (
+              <div className="mb-3 flex shrink-0 flex-wrap items-center gap-2 rounded-xl border border-white/[0.05] bg-white/[0.025] px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                {restoredSourceLabel && (
+                  <span className="text-amber-300/80">{restoredSourceLabel}</span>
+                )}
+                {transcriptSaveStatus && (
+                  <span className="text-blue-300/80">{transcriptSaveStatus}</span>
+                )}
+              </div>
+            )}
             {isEditing ? (
               <div className="flex h-full min-h-0 flex-col space-y-3">
                 <textarea

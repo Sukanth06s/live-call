@@ -36,6 +36,8 @@ interface RoomPageProps {
   onReplaceTranscript: (content: string) => void;
   onStartTranscription: () => void;
   onStopTranscription: () => void;
+  onSaveFinalTranscript?: () => void;
+  transcriptSaveStatus?: string | null;
 }
 
 type VideoItem = {
@@ -70,6 +72,8 @@ export default function RoomPage({
   onReplaceTranscript,
   onStartTranscription,
   onStopTranscription,
+  onSaveFinalTranscript,
+  transcriptSaveStatus,
 }: RoomPageProps) {
   const copyRoomId = useCallback(() => {
     void navigator.clipboard.writeText(roomId);
@@ -388,8 +392,10 @@ export default function RoomPage({
               isTranscribing={isTranscribing}
               isHr={isHr}
               isSuperAdmin={isSuperAdmin}
-              onStopTranscription={onStopTranscription}
-            />
+            onStopTranscription={onStopTranscription}
+            onSaveFinalTranscript={onSaveFinalTranscript}
+            transcriptSaveStatus={transcriptSaveStatus}
+          />
           </div>
         </div>
 

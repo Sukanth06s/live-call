@@ -11,7 +11,7 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
-const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
 const { createClient: createDeepgramClient, LiveTranscriptionEvents } = require("@deepgram/sdk");
 
@@ -66,6 +66,30 @@ async function getAuthenticatedUserFromToken(token) {
   return user;
 }
 
+function getEmailPrefix(email, fallback = "User") {
+  return email?.split("@")[0] || fallback;
+}
+
+async function getUserProfile(user) {
+  const { data, error } = await supabaseAdmin
+    .from("profiles")
+    .select("role, display_name")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[Auth] Failed to fetch user profile:", error);
+    throw new Error("Unable to verify user role");
+  }
+
+  const role = data?.role || "candidate";
+  const displayName = data?.display_name?.trim() || getEmailPrefix(user.email);
+  return {
+    role: allowedRoles.has(role) ? role : "candidate",
+    displayName,
+  };
+}
+
 async function getAuthorizedRole(userId) {
   const { data, error } = await supabaseAdmin
     .from("profiles")
@@ -80,6 +104,29 @@ async function getAuthorizedRole(userId) {
 
   const role = data?.role || "candidate";
   return allowedRoles.has(role) ? role : "candidate";
+}
+
+async function getDisplayNameForUserId(userId, fallback = "User") {
+  if (!userId) return fallback;
+
+  try {
+    const { data } = await supabaseAdmin
+      .from("profiles")
+      .select("display_name")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (data?.display_name?.trim()) return data.display_name.trim();
+  } catch (err) {
+    console.warn("[Profiles] Could not read display name:", err.message);
+  }
+
+  try {
+    const { data } = await supabaseAdmin.auth.admin.getUserById(userId);
+    return getEmailPrefix(data?.user?.email, fallback);
+  } catch (err) {
+    return fallback;
+  }
 }
 
 function getBearerToken(req) {
@@ -110,6 +157,214 @@ const broadcastProjectedRoomState = (roomId) => {
   }
 };
 
+function buildFinalTranscript(blocks) {
+  return blocks.map(b => `${b.speakerName}: ${b.content}`).join("\n\n");
+}
+
+function toIsoFromMillis(value) {
+  return value ? new Date(value).toISOString() : new Date().toISOString();
+}
+
+function mapBlockForInsert(block, interviewId) {
+  return {
+    id: crypto.randomUUID(),
+    interview_id: interviewId,
+    speaker: block.speakerName || "Candidate",
+    content: block.content || "",
+    confidence: 1.0,
+    version: block.version || 1,
+    started_at: block.createdAt ? toIsoFromMillis(block.createdAt) : new Date().toISOString(),
+    ended_at: block.updatedAt ? toIsoFromMillis(block.updatedAt) : new Date().toISOString()
+  };
+}
+
+async function persistRoomTranscript(room, { savedByUserId, reason = "manual" } = {}) {
+  if (!room?.candidateUser?.authUserId) {
+    throw new Error("Cannot persist transcript without a candidate user");
+  }
+
+  finalizeAllActiveSpeakers(room.roomId);
+
+  const candidateUserId = room.candidateUser.authUserId;
+  const hrUserId = room.hrUser?.authUserId || savedByUserId || null;
+  const finalTranscript = buildFinalTranscript(room.blocks);
+  const now = new Date().toISOString();
+
+  if (!room.interviewSessionId) {
+    const { data, error } = await supabaseAdmin
+      .from("interviews")
+      .insert([{
+        room_id: room.roomId,
+        hr_user_id: hrUserId,
+        candidate_user_id: candidateUserId,
+        status: "completed",
+        started_at: now,
+        ended_at: now,
+        final_transcript: finalTranscript
+      }])
+      .select()
+      .single();
+
+    if (error) throw error;
+    room.interviewSessionId = data.id;
+  } else {
+    const { error } = await supabaseAdmin
+      .from("interviews")
+      .update({
+        room_id: room.roomId,
+        hr_user_id: hrUserId,
+        candidate_user_id: candidateUserId,
+        status: "completed",
+        ended_at: now,
+        final_transcript: finalTranscript
+      })
+      .eq("id", room.interviewSessionId);
+
+    if (error) throw error;
+  }
+
+  const deleteResult = await supabaseAdmin
+    .from("transcript_blocks")
+    .delete()
+    .eq("interview_id", room.interviewSessionId);
+
+  if (deleteResult.error) throw deleteResult.error;
+
+  const formattedBlocks = room.blocks
+    .filter((block) => (block.content || "").trim())
+    .map((block) => mapBlockForInsert(block, room.interviewSessionId));
+
+  if (formattedBlocks.length > 0) {
+    const { error } = await supabaseAdmin.from("transcript_blocks").insert(formattedBlocks);
+    if (error) throw error;
+  }
+
+  console.log(`[DB] Persisted transcript ${room.interviewSessionId} for candidate ${candidateUserId} (${reason})`);
+  return {
+    interviewId: room.interviewSessionId,
+    savedAt: now,
+    blockCount: formattedBlocks.length,
+  };
+}
+
+async function loadLatestCandidateTranscript(candidateAuthUserId, currentInterviewId) {
+  if (!candidateAuthUserId) return null;
+
+  let query = supabaseAdmin
+    .from("interviews")
+    .select("id, hr_user_id, candidate_user_id, ended_at, started_at, final_transcript, status")
+    .eq("candidate_user_id", candidateAuthUserId)
+    .not("final_transcript", "is", null)
+    .order("ended_at", { ascending: false, nullsFirst: false })
+    .limit(1);
+
+  if (currentInterviewId) {
+    query = query.neq("id", currentInterviewId);
+  }
+
+  const { data: interviews, error } = await query;
+  if (error) throw error;
+
+  const interview = interviews?.[0];
+  if (!interview) return null;
+
+  const { data: storedBlocks, error: blockError } = await supabaseAdmin
+    .from("transcript_blocks")
+    .select("id, speaker, content, confidence, version, started_at, ended_at")
+    .eq("interview_id", interview.id)
+    .order("started_at", { ascending: true });
+
+  if (blockError) throw blockError;
+
+  const sourceHrName = await getDisplayNameForUserId(interview.hr_user_id, "HR");
+  const sourceSavedAt = interview.ended_at || interview.started_at || new Date().toISOString();
+  const sourceMeta = {
+    sourceInterviewId: interview.id,
+    sourceSavedAt,
+    sourceHrUserId: interview.hr_user_id,
+    sourceHrName,
+    restoredFromHistory: true,
+  };
+
+  if ((!storedBlocks || storedBlocks.length === 0) && !(interview.final_transcript || "").trim()) {
+    return null;
+  }
+
+  const blocks = (storedBlocks || []).length > 0
+    ? storedBlocks.map((block) => {
+        const createdAt = block.started_at ? new Date(block.started_at).getTime() : Date.now();
+        const updatedAt = block.ended_at ? new Date(block.ended_at).getTime() : createdAt;
+        return {
+          id: crypto.randomUUID(),
+          speakerId: "",
+          speakerName: block.speaker || "Candidate",
+          speakerRole: "candidate",
+          content: block.content || "",
+          segments: [{
+            text: block.content || "",
+            isFinal: true,
+            timestamp: updatedAt,
+            confidence: block.confidence ?? 1.0,
+          }],
+          status: "final",
+          isLive: false,
+          isFinal: true,
+          version: block.version || 1,
+          createdAt,
+          updatedAt,
+          editableBy: [],
+          roomId: "",
+          ...sourceMeta,
+        };
+      })
+    : [{
+        id: crypto.randomUUID(),
+        speakerId: "",
+        speakerName: "Candidate",
+        speakerRole: "candidate",
+        content: interview.final_transcript || "",
+        segments: [{
+          text: interview.final_transcript || "",
+          isFinal: true,
+          timestamp: new Date(sourceSavedAt).getTime(),
+          confidence: 1.0,
+        }],
+        status: "final",
+        isLive: false,
+        isFinal: true,
+        version: 1,
+        createdAt: new Date(sourceSavedAt).getTime(),
+        updatedAt: new Date(sourceSavedAt).getTime(),
+        editableBy: [],
+        roomId: "",
+        ...sourceMeta,
+      }];
+
+  return { interview, blocks, sourceMeta };
+}
+
+async function hydrateRoomWithLatestCandidateTranscript(roomId) {
+  const room = getRoom(roomId);
+  if (!room?.candidateUser || !room.hrUser || room.blocks.length > 0) return false;
+
+  try {
+    const latest = await loadLatestCandidateTranscript(room.candidateUser.authUserId, room.interviewSessionId);
+    if (!latest?.blocks?.length) return false;
+
+    room.blocks = latest.blocks.map((block) => ({
+      ...block,
+      speakerId: room.candidateUser.id,
+      speakerName: room.candidateUser.name,
+      editableBy: [room.candidateUser.name, room.hrUser.name].filter(Boolean),
+      roomId,
+    }));
+    return true;
+  } catch (err) {
+    console.error("[DB Error] Failed to restore candidate transcript:", err);
+    return false;
+  }
+}
+
 // Socket Auth Middleware
 io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token;
@@ -120,11 +375,12 @@ io.use(async (socket, next) => {
   
   try {
     const user = await getAuthenticatedUserFromToken(token);
-    const authorizedRole = await getAuthorizedRole(user.id);
+    const { role: authorizedRole, displayName } = await getUserProfile(user);
 
     socket.data.userId = user.id; 
     socket.data.email = user.email;
     socket.data.role = authorizedRole;
+    socket.data.displayName = displayName;
     socket.data.authenticated = true;
     next();
   } catch (err) {
@@ -143,8 +399,8 @@ app.get("/api/me", async (req, res) => {
 
   try {
     const user = await getAuthenticatedUserFromToken(token);
-    const role = await getAuthorizedRole(user.id);
-    res.json({ user: { id: user.id, email: user.email, role } });
+    const { role, displayName } = await getUserProfile(user);
+    res.json({ user: { id: user.id, email: user.email, role, displayName } });
   } catch (err) {
     res.status(401).json({ error: "Invalid token" });
   }
@@ -160,7 +416,7 @@ app.get("/api/token", async (req, res) => {
   let authorizedRole;
   try {
     const user = await getAuthenticatedUserFromToken(token);
-    authorizedRole = await getAuthorizedRole(user.id);
+    authorizedRole = (await getUserProfile(user)).role;
   } catch (err) {
     return res.status(401).json({ error: "Invalid token" });
   }
@@ -179,7 +435,7 @@ app.get("/api/rooms", async (req, res) => {
   if (!token) return res.status(401).json({ error: "No token provided" });
   try {
     const user = await getAuthenticatedUserFromToken(token);
-    const role = await getAuthorizedRole(user.id);
+    const role = (await getUserProfile(user)).role;
     if (role !== "super_admin") {
       return res.status(403).json({ error: "Super Admin access required" });
     }
@@ -203,7 +459,7 @@ io.on("connection", (socket) => {
 
   console.log(`[Socket] Authorized: ${socket.id} as ${socket.data.role}`);
 
-  socket.on("join-room", ({ roomId, userName, role }) => {
+  socket.on("join-room", async ({ roomId, userName, role }) => {
     const requestedRole = socket.data.role || "candidate";
     if (role && role !== requestedRole) {
       socket.emit("join-error", `Your account is authorized as ${requestedRole}, not ${role}.`);
@@ -235,12 +491,16 @@ io.on("connection", (socket) => {
       }
     }
 
-    socket.data.userName = userName;
+    const durableName = socket.data.displayName || userName || getEmailPrefix(socket.data.email);
+
+    socket.data.userName = durableName;
     socket.data.roomId = roomId;
     socket.data.role = requestedRole;
     
-    joinRoom(roomId, socket.id, userName, socket.data.userId, requestedRole);
+    joinRoom(roomId, socket.id, durableName, socket.data.userId, requestedRole);
     socket.join(roomId);
+
+    await hydrateRoomWithLatestCandidateTranscript(roomId);
     
     broadcastProjectedRoomState(roomId);
   });
@@ -343,43 +603,36 @@ io.on("connection", (socket) => {
       activeDeepgramConnections.delete(roomId);
     }
 
-    // Build flattened transcript
-    const finalTranscript = room.blocks.map(b => `${b.speakerName}: ${b.content}`).join("\n\n");
-
-    // Persist to Supabase
-    if (room.interviewSessionId) {
-      try {
-        await supabaseAdmin
-          .from('interviews')
-          .update({
-            status: 'completed',
-            ended_at: new Date().toISOString(),
-            final_transcript: finalTranscript
-          })
-          .eq('id', room.interviewSessionId);
-          
-        const formattedBlocks = room.blocks.map(b => ({
-          id: b.id, // Assuming UUID is used for block ids now, or generate them
-          interview_id: room.interviewSessionId,
-          speaker: b.speakerName,
-          content: b.content,
-          confidence: 1.0, // simplified
-          version: b.version,
-          started_at: b.createdAt ? new Date(b.createdAt).toISOString() : new Date().toISOString(),
-          ended_at: b.updatedAt ? new Date(b.updatedAt).toISOString() : new Date().toISOString()
-        }));
-
-        if (formattedBlocks.length > 0) {
-          await supabaseAdmin.from('transcript_blocks').insert(formattedBlocks);
-        }
-        console.log(`[DB] Successfully persisted interview ${room.interviewSessionId}`);
-      } catch (err) {
-        console.error("[DB Error] Persistence failed:", err);
-      }
+    try {
+      await persistRoomTranscript(room, { savedByUserId: socket.data.userId, reason: "end-interview" });
+    } catch (err) {
+      console.error("[DB Error] Persistence failed:", err);
     }
 
     io.to(roomId).emit("interview-ended");
     broadcastProjectedRoomState(roomId);
+  });
+
+  socket.on("save-final-transcript", async ({ roomId }) => {
+    if (socket.data.role !== "hr") {
+      socket.emit("transcript-save-error", "Only HR can save the final transcript.");
+      return;
+    }
+
+    const room = getRoom(roomId);
+    if (!room) {
+      socket.emit("transcript-save-error", "Room not found.");
+      return;
+    }
+
+    try {
+      const result = await persistRoomTranscript(room, { savedByUserId: socket.data.userId, reason: "manual-save" });
+      socket.emit("transcript-saved", result);
+      broadcastProjectedRoomState(roomId);
+    } catch (err) {
+      console.error("[DB Error] Manual transcript save failed:", err);
+      socket.emit("transcript-save-error", "Could not save transcript.");
+    }
   });
 
   // STRICT PCM ROUTING AUTHORITY
@@ -585,21 +838,9 @@ function handleLeave(socket) {
       // Notify remaining participants in the room
       io.to(roomId).emit("room-closed", "The Interviewer (HR) has disconnected. The session is closed.");
       
-      // Finalize and save blocks
-      finalizeAllActiveSpeakers(roomId);
-      const finalTranscript = room.blocks.map(b => `${b.speakerName}: ${b.content}`).join("\n\n");
-      if (room.interviewSessionId) {
-        supabaseAdmin
-          .from('interviews')
-          .update({
-            status: 'completed',
-            ended_at: new Date().toISOString(),
-            final_transcript: finalTranscript
-          })
-          .eq('id', room.interviewSessionId)
-          .then(() => console.log(`[DB] Successfully closed session on HR disconnect: ${room.interviewSessionId}`))
-          .catch(err => console.error("[DB Error] HR disconnect persistence failed:", err));
-      }
+      persistRoomTranscript(room, { savedByUserId: socket.data.userId, reason: "hr-disconnect" })
+        .then(() => console.log(`[DB] Successfully closed session on HR disconnect: ${room.interviewSessionId}`))
+        .catch(err => console.error("[DB Error] HR disconnect persistence failed:", err));
       
       // Clean up Deepgram connection
       const dgState = activeDeepgramConnections.get(roomId);

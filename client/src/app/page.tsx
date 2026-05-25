@@ -44,6 +44,7 @@ export default function Home() {
   const [joinError, setJoinError] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string>("candidate");
   const accessToken = session?.access_token;
+  const sessionEmail = session?.user?.email;
 
   const {
     socketId,
@@ -51,6 +52,7 @@ export default function Home() {
     users,
     blocks,
     activeTranscriptionSession,
+    transcriptSaveStatus,
     joinRoom,
     leaveRoom: socketLeaveRoom,
     emitMuteToggle,
@@ -60,6 +62,7 @@ export default function Home() {
     emitTranscriptReplace,
     emitStartTranscription,
     emitStopTranscription,
+    emitSaveFinalTranscript,
     socket,
   } = useSocket(accessToken);
 
@@ -115,11 +118,13 @@ export default function Home() {
         if (!res.ok) throw new Error("Unable to load account role");
         const data = await res.json();
         const role = data.user?.role || "candidate";
+        const displayName = data.user?.displayName || sessionEmail?.split('@')[0] || "User";
         const resolvedRole: UserRole =
           role === "hr" || role === "super_admin" || role === "candidate" ? role : "candidate";
         if (!isCancelled) {
           setAuthorizedRole(resolvedRole);
           setUserRole(resolvedRole);
+          setUserName(displayName);
           sessionStorage.setItem("intendedRole", resolvedRole);
           setLoadedProfileToken(accessToken);
         }
@@ -140,7 +145,7 @@ export default function Home() {
     return () => {
       isCancelled = true;
     };
-  }, [accessToken]);
+  }, [accessToken, sessionEmail]);
 
   // 1. Permanent Transcription Lifecycle
   // This effect manages the absolute clean construction and teardown of the audio pipeline.
@@ -344,7 +349,7 @@ export default function Home() {
           onJoinRoom={handleJoinRoom} 
           isConnected={isConnected} 
           authorizedRole={authorizedRole}
-          defaultName={session.user?.email?.split('@')[0] || "User"} 
+          defaultName={userName || sessionEmail?.split('@')[0] || "User"} 
           joinError={joinError}
           onClearError={() => setJoinError(null)}
           accessToken={accessToken}
@@ -376,6 +381,8 @@ export default function Home() {
       onReplaceTranscript={emitTranscriptReplace}
       onStartTranscription={emitStartTranscription}
       onStopTranscription={emitStopTranscription}
+      onSaveFinalTranscript={emitSaveFinalTranscript}
+      transcriptSaveStatus={transcriptSaveStatus}
     />
   );
 }

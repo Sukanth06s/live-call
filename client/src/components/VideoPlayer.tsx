@@ -51,6 +51,7 @@ export default function VideoPlayer({
     }
 
     return () => {
+      container.replaceChildren();
       playingTrackRef.current = null;
     };
   }, [track, isVideoEnabled]);
@@ -60,16 +61,20 @@ export default function VideoPlayer({
 
   return (
     <motion.div
-      layout
       className={`relative aspect-video flex-none overflow-hidden rounded-xl border bg-[#09090d] shadow-xl sm:rounded-2xl ${className} ${
         isSpeaking
           ? "border-emerald-400/60 shadow-emerald-500/15"
-          : "border-white/[0.06] shadow-black/30"
+        : "border-white/[0.06] shadow-black/30"
       }`}
     >
-      {track && isVideoEnabled ? (
-        <div ref={containerRef} className="absolute inset-0 bg-black [&_video]:h-full [&_video]:w-full [&_video]:object-cover" />
-      ) : (
+      <div
+        ref={containerRef}
+        className={`absolute inset-0 bg-black [&_*]:!h-full [&_*]:!w-full [&_video]:!h-full [&_video]:!w-full [&_video]:object-cover ${
+          track && isVideoEnabled ? "opacity-100" : "opacity-0"
+        }`}
+      />
+
+      {(!track || !isVideoEnabled) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#09090d] px-3 pb-9 text-gray-500 sm:px-4 sm:pb-10">
           <div className={`${compact ? "mb-2 h-10 w-10 rounded-xl text-sm" : "mb-3 h-14 w-14 rounded-2xl text-lg"} flex items-center justify-center border border-white/[0.05] bg-white/[0.04] font-bold text-gray-200 shadow-inner`}>
             {initial}
