@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import { ActiveTranscriptionSession, RoomUser, TranscriptBlock } from "@/types";
+import { formatIstDateTime } from "@/lib/time";
 
 let SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
 if (SOCKET_URL && !SOCKET_URL.startsWith("http://") && !SOCKET_URL.startsWith("https://")) {
@@ -110,7 +111,7 @@ export function useSocket(sessionToken?: string) {
     });
 
     socket.on("transcript-saved", (result: { savedAt?: string; blockCount?: number }) => {
-      const savedAt = result.savedAt ? new Date(result.savedAt).toLocaleString() : new Date().toLocaleString();
+      const savedAt = formatIstDateTime(result.savedAt || new Date());
       setTranscriptSaveStatus(`Saved ${result.blockCount ?? 0} block(s) at ${savedAt}`);
     });
 

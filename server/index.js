@@ -157,24 +157,41 @@ const broadcastProjectedRoomState = (roomId) => {
   }
 };
 
-function buildFinalTranscript(blocks) {
-  return blocks.map(b => `${b.speakerName}: ${b.content}`).join("\n\n");
+function getCandidateTranscriptBlocks(room) {
+  return (room?.blocks || []).filter((block) => {
+    const content = (block.content || "").trim();
+    return content && (block.speakerRole === "candidate" || block.speakerName === room?.candidateUser?.name);
+  });
+}
+
+function buildFinalTranscript(room) {
+  return getCandidateTranscriptBlocks(room)
+    .map((block) => (block.content || "").trim())
+    .filter(Boolean)
+    .join(" ");
 }
 
 function toIsoFromMillis(value) {
   return value ? new Date(value).toISOString() : new Date().toISOString();
 }
 
-function mapBlockForInsert(block, interviewId) {
+function mapFinalTranscriptForInsert(room, interviewId, finalTranscript) {
+  const candidateBlocks = getCandidateTranscriptBlocks(room);
+  const startedAt = candidateBlocks[0]?.createdAt ? toIsoFromMillis(candidateBlocks[0].createdAt) : new Date().toISOString();
+  const endedAt = candidateBlocks[candidateBlocks.length - 1]?.updatedAt
+    ? toIsoFromMillis(candidateBlocks[candidateBlocks.length - 1].updatedAt)
+    : new Date().toISOString();
+
   return {
     id: crypto.randomUUID(),
     interview_id: interviewId,
-    speaker: block.speakerName || "Candidate",
-    content: block.content || "",
+    speaker: room.candidateUser?.name || "Candidate",
+    speaker_user_id: room.candidateUser?.authUserId || null,
+    content: finalTranscript,
     confidence: 1.0,
-    version: block.version || 1,
-    started_at: block.createdAt ? toIsoFromMillis(block.createdAt) : new Date().toISOString(),
-    ended_at: block.updatedAt ? toIsoFromMillis(block.updatedAt) : new Date().toISOString()
+    version: candidateBlocks.reduce((max, block) => Math.max(max, block.version || 1), 1),
+    started_at: startedAt,
+    ended_at: endedAt
   };
 }
 
@@ -187,7 +204,7 @@ async function persistRoomTranscript(room, { savedByUserId, reason = "manual" } 
 
   const candidateUserId = room.candidateUser.authUserId;
   const hrUserId = room.hrUser?.authUserId || savedByUserId || null;
-  const finalTranscript = buildFinalTranscript(room.blocks);
+  const finalTranscript = buildFinalTranscript(room);
   const now = new Date().toISOString();
 
   if (!room.interviewSessionId) {
@@ -230,9 +247,9 @@ async function persistRoomTranscript(room, { savedByUserId, reason = "manual" } 
 
   if (deleteResult.error) throw deleteResult.error;
 
-  const formattedBlocks = room.blocks
-    .filter((block) => (block.content || "").trim())
-    .map((block) => mapBlockForInsert(block, room.interviewSessionId));
+  const formattedBlocks = finalTranscript.trim()
+    ? [mapFinalTranscriptForInsert(room, room.interviewSessionId, finalTranscript)]
+    : [];
 
   if (formattedBlocks.length > 0) {
     const { error } = await supabaseAdmin.from("transcript_blocks").insert(formattedBlocks);
@@ -601,12 +618,6 @@ io.on("connection", (socket) => {
     if (dgState && dgState.dgConnection) {
       try { dgState.dgConnection.requestClose(); } catch (e) {}
       activeDeepgramConnections.delete(roomId);
-    }
-
-    try {
-      await persistRoomTranscript(room, { savedByUserId: socket.data.userId, reason: "end-interview" });
-    } catch (err) {
-      console.error("[DB Error] Persistence failed:", err);
     }
 
     io.to(roomId).emit("interview-ended");

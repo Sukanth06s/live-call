@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptBlock } from "@/types";
+import { formatIstDateTime } from "@/lib/time";
 
 interface TranscriptPanelProps {
   blocks: TranscriptBlock[];
@@ -62,7 +63,7 @@ export default function TranscriptPanel({
   const restoredSource = candidateBlocks.find((b) => b.restoredFromHistory);
   const restoredSourceLabel =
     restoredSource?.sourceSavedAt
-      ? `Previous transcript saved by ${restoredSource.sourceHrName || "HR"} on ${new Date(restoredSource.sourceSavedAt).toLocaleString()}`
+      ? `Previous transcript saved by ${restoredSource.sourceHrName || "HR"} on ${formatIstDateTime(restoredSource.sourceSavedAt)}`
       : null;
 
   // Auto-scroll panels
