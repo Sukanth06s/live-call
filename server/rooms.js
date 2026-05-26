@@ -1,11 +1,18 @@
 // In-memory room and user management
 
 const rooms = new Map();
+const supportedLanguages = new Set(["english", "tamil", "hindi"]);
 
-function createRoom(roomId) {
+function normalizeLanguage(language) {
+  const normalized = String(language || "").trim().toLowerCase();
+  return supportedLanguages.has(normalized) ? normalized : "english";
+}
+
+function createRoom(roomId, language = "english") {
   if (!rooms.has(roomId)) {
     rooms.set(roomId, {
       roomId: roomId,
+      language: normalizeLanguage(language),
       interviewSessionId: null, // Set when HR starts the interview
       state: "waiting", // "waiting" | "active" | "transcribing" | "paused" | "ended"
       
@@ -46,6 +53,7 @@ function joinRoom(roomId, userId, userName, authUserId, role, agoraUid = null) {
     authUserId,
     name: userName,
     role,
+    language: room.language,
     roomId,
     isMuted: existingUser?.isMuted ?? false,
     isVideoEnabled: existingUser?.isVideoEnabled ?? true,
@@ -100,12 +108,29 @@ function getAllRooms() {
   for (const [roomId, room] of rooms) {
     activeRooms.push({
       roomId: room.roomId,
+      language: room.language,
       state: room.state,
       participantCount: (room.candidateUser ? 1 : 0) + (room.hrUser ? 1 : 0),
+      isFull: Boolean(room.candidateUser && room.hrUser),
+      candidateName: room.candidateUser?.name || room.lastCandidateUser?.name || null,
+      hrName: room.hrUser?.name || room.lastHrUser?.name || null,
       createdAt: room.createdAt
     });
   }
   return activeRooms;
+}
+
+function getRoomsForRole(role, language = null) {
+  const normalizedLanguage = language ? normalizeLanguage(language) : null;
+  return getAllRooms().filter((room) => {
+    if (role === "hr") {
+      return room.language === normalizedLanguage && Boolean(room.candidateName);
+    }
+    if (role === "super_admin") {
+      return room.isFull;
+    }
+    return false;
+  });
 }
 
 // Return the projected room state depending on who is asking
@@ -125,6 +150,7 @@ function getProjectedRoomState(roomId, requestorRole) {
 
   return {
     roomId: room.roomId,
+    language: room.language,
     interviewSessionId: room.interviewSessionId,
     state: room.state,
     users: visibleUsers,
@@ -266,10 +292,12 @@ function deleteRoom(roomId) {
 
 module.exports = {
   createRoom,
+  normalizeLanguage,
   joinRoom,
   leaveRoom,
   getRoom,
   getAllRooms,
+  getRoomsForRole,
   getProjectedRoomState,
   bumpRoomStateVersion,
   getRoomSocketsByRole,

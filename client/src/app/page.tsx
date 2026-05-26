@@ -9,17 +9,37 @@ import { useDeepgram } from "@/hooks/useDeepgram";
 
 import { supabase } from "@/lib/supabase";
 import { Session } from "@supabase/supabase-js";
-import { UserRole } from "@/types";
+import { RoomLanguage, UserRole } from "@/types";
 
 // Dynamic imports to avoid SSR issues with browser-only APIs
 const Lobby = dynamic(() => import("@/components/Lobby"), { ssr: false });
 const RoomPage = dynamic(() => import("@/components/RoomPage"), { ssr: false });
+
+function getJoinErrorMessage(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("permission_denied") ||
+    normalized.includes("notallowederror") ||
+    normalized.includes("permission denied")
+  ) {
+    return "Microphone access was blocked. Allow microphone permission for this site in your browser, then try joining again.";
+  }
+
+  if (normalized.includes("notfounderror") || normalized.includes("device not found")) {
+    return "No microphone was found. Connect or enable a microphone, then try joining again.";
+  }
+
+  return message;
+}
 
 export default function Home() {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
   const [authorizedRole, setAuthorizedRole] = useState<UserRole>("candidate");
+  const [profileLanguage, setProfileLanguage] = useState<RoomLanguage>("english");
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [loadedProfileToken, setLoadedProfileToken] = useState<string | null>(null);
   
@@ -46,6 +66,23 @@ export default function Home() {
   const accessToken = session?.access_token;
   const sessionEmail = session?.user?.email;
 
+  const handleInvalidSession = useCallback(
+    async (message = "Your session has expired. Please sign in again.") => {
+      sessionStorage.removeItem("intendedRole");
+      sessionStorage.removeItem("intendedRoomId");
+      sessionStorage.setItem("authNotice", message);
+      setJoinError(message);
+      setInRoom(false);
+      setRoomId("");
+      setUserName("");
+      setSession(null);
+      setLoadedProfileToken(null);
+      await supabase.auth.signOut({ scope: "local" });
+      router.replace("/login");
+    },
+    [router]
+  );
+
   const {
     socketId,
     isConnected,
@@ -56,6 +93,7 @@ export default function Home() {
     isTranscriptionChanging,
     transcriptionCountdown,
     joinRoom,
+    createCandidateRoom,
     leaveRoom: socketLeaveRoom,
     emitMuteToggle,
     emitVideoToggle,
@@ -66,7 +104,7 @@ export default function Home() {
     emitStopTranscription,
     emitSaveFinalTranscript,
     socket,
-  } = useSocket(accessToken);
+  } = useSocket(accessToken, handleInvalidSession);
 
   const {
     joinChannel,
@@ -117,14 +155,22 @@ export default function Home() {
             Authorization: `Bearer ${accessToken}`,
           },
         });
+        if (res.status === 401) {
+          await handleInvalidSession("Your session has expired. Please sign in again.");
+          return;
+        }
         if (!res.ok) throw new Error("Unable to load account role");
         const data = await res.json();
         const role = data.user?.role || "candidate";
+        const language = data.user?.language || "english";
         const displayName = data.user?.displayName || sessionEmail?.split('@')[0] || "User";
         const resolvedRole: UserRole =
           role === "hr" || role === "super_admin" || role === "candidate" ? role : "candidate";
+        const resolvedLanguage: RoomLanguage =
+          language === "tamil" || language === "hindi" || language === "english" ? language : "english";
         if (!isCancelled) {
           setAuthorizedRole(resolvedRole);
+          setProfileLanguage(resolvedLanguage);
           setUserRole(resolvedRole);
           setUserName(displayName);
           sessionStorage.setItem("intendedRole", resolvedRole);
@@ -134,6 +180,7 @@ export default function Home() {
         console.error("[Auth] Failed to load account role:", err);
         if (!isCancelled) {
           setAuthorizedRole("candidate");
+          setProfileLanguage("english");
           setUserRole("candidate");
           setLoadedProfileToken(accessToken);
           setJoinError("Could not verify your account role. You have been limited to Candidate access.");
@@ -147,7 +194,7 @@ export default function Home() {
     return () => {
       isCancelled = true;
     };
-  }, [accessToken, sessionEmail]);
+  }, [accessToken, handleInvalidSession, sessionEmail]);
 
   // 1. Candidate-only Transcription Lifecycle
   // Only the candidate streams PCM to Deepgram; HR and Super Admin stay on Agora audio/video only.
@@ -223,18 +270,26 @@ export default function Home() {
   }, [router, socket, leaveChannel, socketLeaveRoom]);
 
   const handleJoinRoom = useCallback(
-    async (newRoomId: string, newUserName: string, _role: string, token?: string) => {
+    async (newRoomId: string, newUserName: string, _role: string, token?: string, language?: RoomLanguage) => {
       try {
         setJoinError(null);
-        setRoomId(newRoomId);
         setUserName(newUserName);
-        roomIdRef.current = newRoomId;
 
         const resolvedRole = authorizedRole;
         sessionStorage.setItem("intendedRole", resolvedRole);
         setUserRole(resolvedRole);
 
-        await joinRoom(newRoomId, newUserName, resolvedRole);
+        const resolvedRoomId =
+          resolvedRole === "candidate"
+            ? await createCandidateRoom(newUserName, language || "english")
+            : newRoomId;
+
+        setRoomId(resolvedRoomId);
+        roomIdRef.current = resolvedRoomId;
+
+        if (resolvedRole !== "candidate") {
+          await joinRoom(resolvedRoomId, newUserName, resolvedRole);
+        }
 
         let agoraToken = token;
         let agoraUid: number | undefined;
@@ -245,7 +300,7 @@ export default function Home() {
               socketUrl = `https://${socketUrl}`;
             }
             const params = new URLSearchParams({
-              channelName: newRoomId,
+              channelName: resolvedRoomId,
             });
             const res = await fetch(`${socketUrl}/api/token?${params.toString()}`, {
               headers: {
@@ -272,18 +327,30 @@ export default function Home() {
         }
 
         // Just join Agora. The useEffect above will handle starting Deepgram.
-        await joinChannel(newRoomId, agoraToken, agoraUid, resolvedRole);
+        await joinChannel(resolvedRoomId, agoraToken, agoraUid, resolvedRole);
         setInRoom(true);
       } catch (err: unknown) {
         console.warn("Failed to join room:", err);
-        setJoinError(err instanceof Error ? err.message : String(err));
+        setJoinError(getJoinErrorMessage(err));
         socketLeaveRoom();
         await leaveChannel();
         stopTranscription();
       }
     },
-    [accessToken, authorizedRole, joinRoom, joinChannel, socketLeaveRoom, leaveChannel, stopTranscription]
+    [accessToken, authorizedRole, createCandidateRoom, joinRoom, joinChannel, socketLeaveRoom, leaveChannel, stopTranscription]
   );
+
+  useEffect(() => {
+    if (!accessToken || inRoom || loadedProfileToken !== accessToken || authorizedRole !== "super_admin") return;
+    const intendedRoomId = sessionStorage.getItem("intendedRoomId");
+    if (!intendedRoomId) return;
+
+    sessionStorage.removeItem("intendedRoomId");
+    const timeout = window.setTimeout(() => {
+      void handleJoinRoom(intendedRoomId, userName || sessionEmail?.split("@")[0] || "User", "super_admin");
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [accessToken, authorizedRole, handleJoinRoom, inRoom, loadedProfileToken, sessionEmail, userName]);
 
   const handleLeaveRoom = useCallback(async () => {
     try {
@@ -359,6 +426,7 @@ export default function Home() {
           onJoinRoom={handleJoinRoom} 
           isConnected={isConnected} 
           authorizedRole={authorizedRole}
+          userLanguage={profileLanguage}
           defaultName={userName || sessionEmail?.split('@')[0] || "User"} 
           joinError={joinError}
           onClearError={() => setJoinError(null)}

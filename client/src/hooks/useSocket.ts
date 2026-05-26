@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { ActiveTranscriptionSession, RoomState, RoomUser, TranscriptBlock } from "@/types";
+import { ActiveTranscriptionSession, RoomLanguage, RoomState, RoomUser, TranscriptBlock } from "@/types";
 import { formatIstDateTime } from "@/lib/time";
 
 let SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
@@ -11,7 +11,7 @@ if (SOCKET_URL && !SOCKET_URL.startsWith("http://") && !SOCKET_URL.startsWith("h
 }
 
 
-export function useSocket(sessionToken?: string) {
+export function useSocket(sessionToken?: string, onAuthError?: (message: string) => void) {
   const socketRef = useRef<Socket | null>(null);
   const roomIdRef = useRef<string | null>(null);
   const userNameRef = useRef<string | null>(null);
@@ -81,6 +81,10 @@ export function useSocket(sessionToken?: string) {
 
     socket.on("connect_error", (err) => {
       console.error(`[Socket] connect_error: ${err.message}`);
+      if (err.message.toLowerCase().includes("invalid token")) {
+        socket.disconnect();
+        onAuthError?.("Your session has expired. Please sign in again.");
+      }
     });
 
     socket.on("room-state", (state: RoomState) => {
@@ -164,24 +168,16 @@ export function useSocket(sessionToken?: string) {
         socketRef.current = null;
       }
     };
-  }, [sessionToken]);
+  }, [onAuthError, sessionToken]);
 
-  const joinRoom = useCallback((roomId: string, userName: string, role?: string): Promise<void> => {
+  const waitForJoinAck = useCallback((expectedRoomId?: string): Promise<{ roomId: string; role?: string; language?: RoomLanguage }> => {
     return new Promise((resolve, reject) => {
       if (socketRef.current) {
-        roomIdRef.current = roomId;
-        userNameRef.current = userName;
-        if (role) {
-          roleRef.current = role;
-        }
-
-        roomStateVersionRef.current = 0;
-
-        const onJoinAck = (ack: { roomId: string }) => {
-          if (ack.roomId !== roomId) return;
+        const onJoinAck = (ack: { roomId: string; role?: string; language?: RoomLanguage }) => {
+          if (expectedRoomId && ack.roomId !== expectedRoomId) return;
           socketRef.current?.off("join-ack", onJoinAck);
           socketRef.current?.off("join-error", onJoinError);
-          resolve();
+          resolve(ack);
         };
 
         const onJoinError = (msg: string) => {
@@ -195,14 +191,42 @@ export function useSocket(sessionToken?: string) {
 
         socketRef.current.on("join-ack", onJoinAck);
         socketRef.current.once("join-error", onJoinError);
-
-        socketRef.current.emit("join-room", { roomId, userName, role: roleRef.current });
-        setCurrentRoomId(roomId);
       } else {
         reject(new Error("Socket not connected"));
       }
     });
   }, []);
+
+  const joinRoom = useCallback(async (roomId: string, userName: string, role?: string): Promise<void> => {
+    if (!socketRef.current) throw new Error("Socket not connected");
+
+    roomIdRef.current = roomId;
+    userNameRef.current = userName;
+    if (role) {
+      roleRef.current = role;
+    }
+    roomStateVersionRef.current = 0;
+    setCurrentRoomId(roomId);
+
+    const ackPromise = waitForJoinAck(roomId);
+    socketRef.current.emit("join-room", { roomId, userName, role: roleRef.current });
+    await ackPromise;
+  }, [waitForJoinAck]);
+
+  const createCandidateRoom = useCallback(async (userName: string, language: RoomLanguage): Promise<string> => {
+    if (!socketRef.current) throw new Error("Socket not connected");
+
+    userNameRef.current = userName;
+    roleRef.current = "candidate";
+    roomStateVersionRef.current = 0;
+
+    const ackPromise = waitForJoinAck();
+    socketRef.current.emit("candidate-create-room", { userName, language });
+    const ack = await ackPromise;
+    roomIdRef.current = ack.roomId;
+    setCurrentRoomId(ack.roomId);
+    return ack.roomId;
+  }, [waitForJoinAck]);
 
   const leaveRoom = useCallback(() => {
     if (socketRef.current) {
@@ -257,6 +281,7 @@ export function useSocket(sessionToken?: string) {
     isTranscriptionChanging,
     transcriptionCountdown,
     joinRoom,
+    createCandidateRoom,
     leaveRoom,
     emitMuteToggle,
     emitVideoToggle,

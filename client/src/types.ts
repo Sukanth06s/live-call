@@ -1,6 +1,7 @@
 export type BlockStatus = "live" | "finalizing" | "final" | "editing";
 
 export type UserRole = "candidate" | "hr" | "super_admin";
+export type RoomLanguage = "english" | "tamil" | "hindi";
 
 export type InterviewState = "waiting" | "active" | "transcribing" | "paused" | "ended";
 
@@ -10,6 +11,7 @@ export interface RoomUser {
   authUserId: string;  // Supabase Auth UUID
   name: string;        // Display name
   role: UserRole;
+  language?: RoomLanguage;
   roomId: string;
   isMuted: boolean;
   isVideoEnabled: boolean;
@@ -55,6 +57,7 @@ export interface TranscriptBlock {
 
 export interface RoomState {
   roomId: string;
+  language?: RoomLanguage;
   users: RoomUser[];
   blocks: TranscriptBlock[];
   activeTranscriptionSession?: ActiveTranscriptionSession;

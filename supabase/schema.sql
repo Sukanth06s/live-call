@@ -4,6 +4,8 @@ CREATE TABLE profiles (
   user_id UUID PRIMARY KEY,
   role TEXT NOT NULL DEFAULT 'candidate'
     CHECK (role IN ('candidate', 'hr', 'super_admin')),
+  language TEXT NOT NULL DEFAULT 'english'
+    CHECK (language IN ('english', 'tamil', 'hindi')),
   display_name TEXT,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()

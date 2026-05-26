@@ -2,12 +2,14 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { RoomLanguage } from "@/types";
 
 interface LobbyProps {
-  onJoinRoom: (roomId: string, userName: string, role: string, token?: string) => void;
+  onJoinRoom: (roomId: string, userName: string, role: string, token?: string, language?: RoomLanguage) => void;
   isConnected: boolean;
   authorizedRole: string;
   defaultName?: string;
+  userLanguage?: RoomLanguage;
   joinError?: string | null;
   onClearError?: () => void;
   accessToken?: string;
@@ -15,24 +17,37 @@ interface LobbyProps {
 
 interface ActiveRoom {
   roomId: string;
+  language: RoomLanguage;
   state: string;
   participantCount: number;
+  isFull: boolean;
+  candidateName: string | null;
+  hrName: string | null;
   createdAt: number;
 }
+
+const languages: { value: RoomLanguage; label: string }[] = [
+  { value: "english", label: "English" },
+  { value: "tamil", label: "Tamil" },
+  { value: "hindi", label: "Hindi" },
+];
+
+const getLanguageLabel = (language?: string) =>
+  languages.find((item) => item.value === language)?.label || "English";
 
 export default function Lobby({ 
   onJoinRoom, 
   isConnected, 
   authorizedRole,
   defaultName,
+  userLanguage = "english",
   joinError,
   onClearError,
   accessToken
 }: LobbyProps) {
-  const [roomId, setRoomId] = useState("");
   const [userName, setUserName] = useState(defaultName || "");
+  const [selectedLanguage, setSelectedLanguage] = useState<RoomLanguage>("english");
   const [token] = useState("");
-  const [mode, setMode] = useState<"join" | "create">("join");
   
   // Super Admin active rooms dashboard state
   const [activeRooms, setActiveRooms] = useState<ActiveRoom[]>([]);
@@ -41,7 +56,7 @@ export default function Lobby({
 
   // Fetch active rooms for Super Admin
   const fetchActiveRooms = useCallback(async () => {
-    if (authorizedRole !== "super_admin" || !accessToken) return;
+    if ((authorizedRole !== "super_admin" && authorizedRole !== "hr") || !accessToken) return;
     try {
       setRoomError(null);
       let socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
@@ -62,9 +77,9 @@ export default function Lobby({
     }
   }, [authorizedRole, accessToken]);
 
-  // Load rooms on mount & when role becomes super_admin
+  // Load rooms on mount & when role can see room queues
   useEffect(() => {
-    if (authorizedRole === "super_admin" && accessToken) {
+    if ((authorizedRole === "super_admin" || authorizedRole === "hr") && accessToken) {
       let isCancelled = false;
       const loadRooms = async () => {
         setLoadingRooms(true);
@@ -86,24 +101,17 @@ export default function Lobby({
     e.preventDefault();
     if (!userName.trim()) return;
 
-    // Super Admin must click an active room square to join
-    if (authorizedRole === "super_admin") return;
-
-    const finalRoomId =
-      mode === "create"
-        ? `room-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
-        : roomId.trim();
-
-    if (!finalRoomId) return;
+    // HR and Super Admin must click a room from their queue.
+    if (authorizedRole !== "candidate") return;
     
     sessionStorage.setItem("intendedRole", authorizedRole);
-    onJoinRoom(finalRoomId, userName.trim(), authorizedRole, token.trim() || undefined);
+    onJoinRoom("", userName.trim(), authorizedRole, token.trim() || undefined, selectedLanguage);
   };
 
   const handleJoinActiveRoom = (targetRoomId: string) => {
     if (!userName.trim()) return;
-    sessionStorage.setItem("intendedRole", "super_admin");
-    onJoinRoom(targetRoomId, userName.trim(), "super_admin");
+    sessionStorage.setItem("intendedRole", authorizedRole);
+    onJoinRoom(targetRoomId, userName.trim(), authorizedRole);
   };
 
   return (
@@ -204,8 +212,8 @@ export default function Lobby({
 
             {/* Conditional Views based on role choice */}
             <AnimatePresence mode="wait">
-              {authorizedRole === "super_admin" ? (
-                /* Super Admin Dashboard Grid */
+              {authorizedRole === "super_admin" || authorizedRole === "hr" ? (
+                /* HR / Super Admin room queue */
                 <motion.div
                   key="admin-rooms"
                   initial={{ opacity: 0, height: 0 }}
@@ -216,7 +224,7 @@ export default function Lobby({
                   <div className="flex items-center justify-between border-b border-white/[0.04] pb-2 select-none">
                     <span className="flex min-w-0 items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-400 sm:text-[11px]">
                       <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
-                      Active Ongoing Sessions ({activeRooms.length})
+                      {authorizedRole === "hr" ? `${getLanguageLabel(userLanguage)} Candidate Queue` : "Ongoing Sessions"} ({activeRooms.length})
                     </span>
                     <button
                       type="button"
@@ -247,21 +255,26 @@ export default function Lobby({
                         </svg>
                       </div>
                       <div>
-                        <div className="text-xs font-semibold text-gray-400">No active rooms found</div>
-                        <div className="text-[10px] text-gray-600 mt-0.5">Standing by. Interview rooms will appear here automatically.</div>
+                        <div className="text-xs font-semibold text-gray-400">No rooms found</div>
+                        <div className="text-[10px] text-gray-600 mt-0.5">
+                          {authorizedRole === "hr" ? "Candidates matching your language will appear here." : "Full calls will appear here automatically."}
+                        </div>
                       </div>
                     </div>
                   ) : (
                     <div className="grid max-h-[min(42dvh,260px)] grid-cols-1 gap-3 overflow-y-auto pr-1 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10 sm:grid-cols-2">
                       {activeRooms.map((room) => {
                         const isLiveTranscribing = room.state === "transcribing";
+                        const canJoin = authorizedRole === "super_admin" || !room.isFull;
                         return (
                           <motion.div
                             key={room.roomId}
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}
-                            onClick={() => handleJoinActiveRoom(room.roomId)}
-                            className="group relative flex min-h-[105px] cursor-pointer flex-col justify-between overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 shadow-md transition-all duration-300 select-none hover:border-indigo-500/30 hover:bg-indigo-500/[0.03] sm:aspect-square"
+                            onClick={() => canJoin && handleJoinActiveRoom(room.roomId)}
+                            className={`group relative flex min-h-[120px] flex-col justify-between overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 shadow-md transition-all duration-300 select-none sm:aspect-square ${
+                              canJoin ? "cursor-pointer hover:border-indigo-500/30 hover:bg-indigo-500/[0.03]" : "cursor-not-allowed opacity-75"
+                            }`}
                           >
                             {/* Inner ambient glow */}
                             <div className={`absolute -right-6 -bottom-6 w-16 h-16 rounded-full blur-xl opacity-20 transition-all ${
@@ -270,28 +283,35 @@ export default function Lobby({
 
                             <div className="space-y-1">
                               <div className="text-xs font-mono font-bold text-gray-300 truncate tracking-wide group-hover:text-white transition-colors">
-                                {room.roomId}
+                                {room.candidateName || "Candidate"}
                               </div>
                               <div className="flex items-center gap-1 text-[10px] text-gray-500 font-medium">
                                 <svg className="w-3.5 h-3.5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
                                 </svg>
-                                <span>{room.participantCount} Participant{room.participantCount !== 1 ? "s" : ""}</span>
+                                <span>{getLanguageLabel(room.language)} · {room.participantCount}/2</span>
                               </div>
+                              {room.hrName && (
+                                <div className="truncate text-[10px] font-medium text-gray-500">
+                                  HR: {room.hrName}
+                                </div>
+                              )}
                             </div>
 
                             <div className="flex items-center justify-between pt-2 border-t border-white/[0.03] mt-2">
                               <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                                isLiveTranscribing
+                                room.isFull
+                                  ? "bg-amber-500/10 text-amber-300 border border-amber-500/20"
+                                  : isLiveTranscribing
                                   ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
                                   : room.state === "active"
                                   ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
                                   : "bg-gray-500/10 text-gray-400 border border-gray-500/20"
                               }`}>
-                                {isLiveTranscribing ? "Live" : room.state}
+                                {room.isFull ? "Ongoing / Full" : isLiveTranscribing ? "Live" : "Waiting"}
                               </span>
                               <span className="text-[10px] text-indigo-400 font-bold group-hover:translate-x-0.5 transition-transform flex items-center gap-0.5">
-                                Join
+                                {authorizedRole === "super_admin" ? "Observe" : room.isFull ? "Full" : "Join Call"}
                                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                                 </svg>
@@ -304,7 +324,7 @@ export default function Lobby({
                   )}
                 </motion.div>
               ) : (
-                /* Regular Room Creator / Joiner Controls */
+                /* Candidate language queue controls */
                 <motion.div
                   key="regular-room"
                   initial={{ opacity: 0, height: 0 }}
@@ -312,53 +332,39 @@ export default function Lobby({
                   exit={{ opacity: 0, height: 0 }}
                   className="space-y-4"
                 >
-                  {/* Mode Toggle for Candidate/HR */}
-                  <div className="flex gap-1 p-1 bg-white/[0.03] rounded-xl border border-white/[0.05] select-none">
-                    {(["join", "create"] as const).map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => setMode(m)}
-                        className={`flex-1 py-2 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-200 cursor-pointer ${
-                          mode === m
-                            ? "bg-white/[0.07] text-white shadow-sm"
-                            : "text-gray-500 hover:text-gray-300"
-                        }`}
-                      >
-                        {m === "join" ? "Join Room" : "Create Room"}
-                      </button>
-                    ))}
-                  </div>
-
-                  {mode === "join" ? (
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-[11px] font-bold text-gray-500 mb-2 uppercase tracking-wider select-none">
-                          Room ID
-                        </label>
-                        <input
-                          type="text"
-                          value={roomId}
-                          onChange={(e) => setRoomId(e.target.value)}
-                          placeholder="Enter room ID"
-                          className="w-full px-4 py-3 bg-white/[0.03] border border-white/[0.07] rounded-xl text-white placeholder-gray-500 text-sm focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 transition-all duration-300 font-medium"
-                          required
-                        />
-                      </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-500 mb-2 uppercase tracking-wider select-none">
+                      Interview Language
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {languages.map((language) => (
+                        <button
+                          key={language.value}
+                          type="button"
+                          onClick={() => setSelectedLanguage(language.value)}
+                          className={`rounded-xl border px-3 py-3 text-xs font-bold uppercase tracking-wider transition-all ${
+                            selectedLanguage === language.value
+                              ? "border-indigo-400/40 bg-indigo-500/20 text-white shadow-md shadow-indigo-500/10"
+                              : "border-white/[0.06] bg-white/[0.03] text-gray-500 hover:text-gray-300"
+                          }`}
+                        >
+                          {language.label}
+                        </button>
+                      ))}
                     </div>
-                  ) : null}
+                  </div>
 
                   <motion.button
                     type="submit"
                     whileHover={{ scale: 1.01 }}
                     whileTap={{ scale: 0.98 }}
-                    disabled={!isConnected || !userName.trim() || (mode === "join" && !roomId.trim())}
+                    disabled={!isConnected || !userName.trim()}
                     className="w-full py-3.5 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold text-xs uppercase tracking-widest cursor-pointer
                       shadow-lg shadow-blue-500/10 hover:shadow-blue-500/25
                       disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:shadow-blue-500/10
                       transition-all duration-300 mt-2"
                   >
-                    {mode === "create" ? "Create & Join Room" : "Join Room"}
+                    Join a Room
                   </motion.button>
                 </motion.div>
               )}

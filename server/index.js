@@ -18,9 +18,11 @@ const { createClient: createDeepgramClient, LiveTranscriptionEvents } = require(
 const supabaseAdmin = require("./supabase");
 const {
   createRoom,
+  normalizeLanguage,
   joinRoom,
   leaveRoom,
   getRoom,
+  getRoomsForRole,
   getProjectedRoomState,
   bumpRoomStateVersion,
   getRoomSocketsByRole,
@@ -81,7 +83,7 @@ function getEmailPrefix(email, fallback = "User") {
 async function getUserProfile(user) {
   const { data, error } = await supabaseAdmin
     .from("profiles")
-    .select("role, display_name")
+    .select("role, display_name, language")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -95,6 +97,7 @@ async function getUserProfile(user) {
   return {
     role: allowedRoles.has(role) ? role : "candidate",
     displayName,
+    language: normalizeLanguage(data?.language),
   };
 }
 
@@ -112,6 +115,10 @@ async function getAuthorizedRole(userId) {
 
   const role = data?.role || "candidate";
   return allowedRoles.has(role) ? role : "candidate";
+}
+
+function createInternalRoomId() {
+  return `room-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
 }
 
 async function getDisplayNameForUserId(userId, fallback = "User") {
@@ -462,12 +469,13 @@ io.use(async (socket, next) => {
   
   try {
     const user = await getAuthenticatedUserFromToken(token);
-    const { role: authorizedRole, displayName } = await getUserProfile(user);
+    const { role: authorizedRole, displayName, language } = await getUserProfile(user);
 
     socket.data.userId = user.id; 
     socket.data.email = user.email;
     socket.data.role = authorizedRole;
     socket.data.displayName = displayName;
+    socket.data.language = language;
     socket.data.authenticated = true;
     next();
   } catch (err) {
@@ -486,8 +494,8 @@ app.get("/api/me", async (req, res) => {
 
   try {
     const user = await getAuthenticatedUserFromToken(token);
-    const { role, displayName } = await getUserProfile(user);
-    res.json({ user: { id: user.id, email: user.email, role, displayName } });
+    const { role, displayName, language } = await getUserProfile(user);
+    res.json({ user: { id: user.id, email: user.email, role, displayName, language } });
   } catch (err) {
     res.status(401).json({ error: "Invalid token" });
   }
@@ -510,6 +518,24 @@ app.get("/api/token", async (req, res) => {
 
   const appId = process.env.AGORA_APP_ID;
   const appCertificate = process.env.AGORA_APP_CERTIFICATE;
+  const tokenRoom = getRoom(channelName);
+  if (!tokenRoom) return res.status(404).json({ error: "Room not found" });
+  if (
+    authorizedRole === "candidate" &&
+    tokenRoom.candidateUser?.authUserId !== user.id &&
+    tokenRoom.lastCandidateUser?.authUserId !== user.id
+  ) {
+    return res.status(403).json({ error: "Candidates must create their own waiting room" });
+  }
+  if (authorizedRole === "hr" && tokenRoom.language !== (await getUserProfile(user)).language) {
+    return res.status(403).json({ error: "Room language does not match HR profile" });
+  }
+  if (authorizedRole === "hr" && tokenRoom.hrUser && tokenRoom.hrUser.authUserId !== user.id) {
+    return res.status(403).json({ error: "Room already has an HR" });
+  }
+  if (authorizedRole === "super_admin" && (!tokenRoom.candidateUser || !tokenRoom.hrUser)) {
+    return res.status(403).json({ error: "Super Admins can only observe full ongoing calls" });
+  }
   
   const rtcRole = authorizedRole === "super_admin" ? RtcRole.SUBSCRIBER : RtcRole.PUBLISHER;
   const uid = createAgoraUid(user.id, channelName, authorizedRole);
@@ -523,12 +549,11 @@ app.get("/api/rooms", async (req, res) => {
   if (!token) return res.status(401).json({ error: "No token provided" });
   try {
     const user = await getAuthenticatedUserFromToken(token);
-    const role = (await getUserProfile(user)).role;
-    if (role !== "super_admin") {
-      return res.status(403).json({ error: "Super Admin access required" });
+    const profile = await getUserProfile(user);
+    if (profile.role === "candidate") {
+      return res.status(403).json({ error: "Room list access requires HR or Super Admin access" });
     }
-    const { getAllRooms } = require("./rooms");
-    res.json({ rooms: getAllRooms() });
+    res.json({ rooms: getRoomsForRole(profile.role, profile.language) });
   } catch (err) {
     res.status(401).json({ error: "Invalid token" });
   }
@@ -553,6 +578,30 @@ io.on("connection", (socket) => {
 
   console.log(`[Socket] Authorized: ${socket.id} as ${socket.data.role}`);
 
+  socket.on("candidate-create-room", async ({ userName, language }) => {
+    if (socket.data.role !== "candidate") {
+      socket.emit("join-error", "Only candidates can create waiting rooms.");
+      return;
+    }
+
+    const roomId = createInternalRoomId();
+    const roomLanguage = normalizeLanguage(language);
+    const durableName = socket.data.displayName || userName || getEmailPrefix(socket.data.email);
+
+    socket.data.userName = durableName;
+    socket.data.roomId = roomId;
+    socket.data.role = "candidate";
+    socket.data.language = roomLanguage;
+    socket.data.agoraUid = createAgoraUid(socket.data.userId, roomId, "candidate");
+
+    createRoom(roomId, roomLanguage);
+    joinRoom(roomId, socket.id, durableName, socket.data.userId, "candidate", socket.data.agoraUid);
+    socket.join(roomId);
+
+    socket.emit("join-ack", { roomId, role: "candidate", language: roomLanguage });
+    broadcastProjectedRoomState(roomId);
+  });
+
   socket.on("join-room", async ({ roomId, userName, role }) => {
     const requestedRole = socket.data.role || "candidate";
     if (role && role !== requestedRole) {
@@ -560,6 +609,26 @@ io.on("connection", (socket) => {
       return;
     }
     const room = getRoom(roomId);
+    if (!room) {
+      socket.emit("join-error", "Room is no longer available.");
+      return;
+    }
+    if (
+      requestedRole === "candidate" &&
+      room.candidateUser?.authUserId !== socket.data.userId &&
+      room.lastCandidateUser?.authUserId !== socket.data.userId
+    ) {
+      socket.emit("join-error", "Candidates must choose a language and use Join a Room.");
+      return;
+    }
+    if (requestedRole === "hr" && room.language !== socket.data.language) {
+      socket.emit("join-error", "This candidate is waiting for a different language.");
+      return;
+    }
+    if (requestedRole === "super_admin" && (!room.candidateUser || !room.hrUser)) {
+      socket.emit("join-error", "Super Admins can only observe full ongoing calls.");
+      return;
+    }
     if (room) {
       if (
         requestedRole === "candidate" &&
@@ -614,6 +683,7 @@ io.on("connection", (socket) => {
     socket.data.userName = durableName;
     socket.data.roomId = roomId;
     socket.data.role = requestedRole;
+    socket.data.language = room.language;
     socket.data.agoraUid = createAgoraUid(socket.data.userId, roomId, requestedRole);
     
     joinRoom(roomId, socket.id, durableName, socket.data.userId, requestedRole, socket.data.agoraUid);
@@ -747,8 +817,25 @@ io.on("connection", (socket) => {
 
     closeDeepgramForRoom(roomId);
 
-    io.to(roomId).emit("interview-ended");
-    broadcastProjectedRoomState(roomId);
+    io.to(roomId).emit("room-closed", "The interview has ended. The session is closed.");
+
+    if ((room.blocks || []).some((block) => (block.content || "").trim()) && (room.candidateUser || room.lastCandidateUser)) {
+      try {
+        await persistRoomTranscript(room, { savedByUserId: socket.data.userId, reason: "interview-ended" });
+      } catch (err) {
+        console.error("[DB Error] End interview persistence failed:", err);
+      }
+    }
+
+    const { regular, superAdmin } = getRoomSocketsByRole(roomId);
+    [...regular, ...superAdmin].forEach(sid => {
+      const s = io.sockets.sockets.get(sid);
+      if (s) {
+        s.leave(roomId);
+        s.data.roomId = null;
+      }
+    });
+    deleteRoom(roomId);
   });
 
   socket.on("stop-transcription", async ({ roomId }) => {
