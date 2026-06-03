@@ -110,6 +110,8 @@ export default function CandidateVideoPanel({
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [candidateUploadFile, setCandidateUploadFile] = useState<File | null>(null);
+  const [candidateUploadPreviewUrl, setCandidateUploadPreviewUrl] = useState<string | null>(null);
   const [isMounted, setIsMounted] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -218,7 +220,14 @@ export default function CandidateVideoPanel({
     }
   }, [apiFetch, refreshVideoState]);
 
-  const handleCandidateFile = async (file: File | null) => {
+  const clearCandidateUploadPreview = useCallback(() => {
+    if (candidateUploadPreviewUrl) URL.revokeObjectURL(candidateUploadPreviewUrl);
+    setCandidateUploadPreviewUrl(null);
+    setCandidateUploadFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, [candidateUploadPreviewUrl]);
+
+  const handleCandidateFile = (file: File | null) => {
     if (!file) return;
     setMessage(null);
     if (!allowedMimeTypes.has(file.type)) {
@@ -230,6 +239,17 @@ export default function CandidateVideoPanel({
       return;
     }
 
+    if (candidateUploadPreviewUrl) URL.revokeObjectURL(candidateUploadPreviewUrl);
+    setCandidateUploadFile(file);
+    setCandidateUploadPreviewUrl(URL.createObjectURL(file));
+    setMessage("Preview the selected video, then save it for HR review.");
+  };
+
+  const uploadSelectedCandidateFile = async () => {
+    const file = candidateUploadFile;
+    if (!file) return;
+
+    setMessage(null);
     setIsUploading(true);
     setUploadProgress(0);
     setUploadPhase("Preparing upload...");
@@ -244,6 +264,7 @@ export default function CandidateVideoPanel({
       await uploadToSignedUrlWithProgress(init.upload, file, setUploadProgress);
       setUploadPhase("Finalizing upload...");
       await apiFetch(`/api/candidate-videos/${init.video.id}/complete-upload`, { method: "POST" });
+      clearCandidateUploadPreview();
       setMessage("Verification video uploaded for HR review.");
       await refreshVideoState();
     } catch (err) {
@@ -258,7 +279,6 @@ export default function CandidateVideoPanel({
     } finally {
       setIsUploading(false);
       setUploadPhase(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -459,6 +479,35 @@ export default function CandidateVideoPanel({
             </div>
           )}
 
+          {candidateUploadPreviewUrl && candidateUploadFile && (
+            <div className="mt-4 space-y-3 rounded-xl border border-white/[0.06] bg-black/20 p-3">
+              <video src={candidateUploadPreviewUrl} controls className="max-h-[320px] w-full rounded-lg bg-black" />
+              <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="truncate">{candidateUploadFile.name}</span>
+                  <span>{formatBytes(candidateUploadFile.size)}</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={clearCandidateUploadPreview}
+                    disabled={isUploading}
+                    className="rounded-lg border border-white/10 px-3 py-2 text-xs font-bold text-gray-300 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void uploadSelectedCandidateFile()}
+                    disabled={isUploading}
+                    className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Save Upload
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {isUploading && (
             <div className="mt-4 rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-4 py-3 text-xs text-indigo-100">
               <div className="mb-2 flex items-center justify-between gap-3">
