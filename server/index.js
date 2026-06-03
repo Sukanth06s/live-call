@@ -405,7 +405,7 @@ async function buildCandidateVideoState(room, requestor) {
   const activeCandidateVideo = candidateUserId ? await getActiveCandidateVideo(candidateUserId) : null;
   const blockingVideo = activeCandidateVideo || currentVideo;
 
-  const canViewVideo = requestor.role === "super_admin" || requestor.role === "hr";
+  const canViewVideo = requestor.role === "super_admin" || requestor.role === "hr" || (requestor.role === "candidate" && room?.candidateUser?.authUserId === requestor.userId);
   const signedUrl = canViewVideo && currentVideo && currentVideo.status !== "uploading"
     ? await createSignedVideoUrl(currentVideo)
     : null;

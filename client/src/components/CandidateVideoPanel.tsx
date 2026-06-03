@@ -364,7 +364,7 @@ export default function CandidateVideoPanel({
   const showCandidateUpload = isCandidate && videoState?.uploadAllowed && !isUploading;
   const showPendingCandidateStatus = isCandidate && !videoState?.uploadAllowed && videoState?.reason;
   const canReview = isHr && currentVideo?.source === "candidate_upload" && currentVideo.status === "pending_review" && currentVideo.signedUrl;
-  const canViewApproved = (isHr || isSuperAdmin) && currentVideo?.status === "approved" && currentVideo.signedUrl;
+  const canViewAttachedVideo = Boolean(currentVideo?.signedUrl && currentVideo.status !== "uploading" && (isCandidate || isHr || isSuperAdmin));
   const canResetUpload = isCandidate && currentVideo?.status === "uploading";
 
   const recordingPreviewModal = isMounted && (recordingState === "preview" || recordingState === "saving") && previewUrl
@@ -487,7 +487,7 @@ export default function CandidateVideoPanel({
             </div>
           )}
 
-          {(canReview || canViewApproved) && (
+          {canViewAttachedVideo && (
             <div className="mt-4 space-y-3">
               <video src={currentVideo?.signedUrl || undefined} controls className="max-h-[320px] w-full rounded-lg bg-black" />
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
