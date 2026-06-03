@@ -415,15 +415,21 @@ async function buildCandidateVideoState(room, requestor) {
   const currentVideo = room?.interviewSessionId ? await getInterviewCandidateVideo(room.interviewSessionId) : null;
   const activeCandidateVideo = candidateUserId ? await getActiveCandidateVideo(candidateUserId) : null;
   const blockingVideo = activeCandidateVideo || currentVideo;
-  const displayVideo = currentVideo || (blockingVideo?.status === "uploading" ? blockingVideo : null);
-  const resettableUpload = blockingVideo?.source === "candidate_upload" && blockingVideo.status === "uploading"
+  const isResettableCandidateUpload = blockingVideo?.source === "candidate_upload" && ["uploading", "pending_review"].includes(blockingVideo.status);
+  const displayVideo = currentVideo || (isResettableCandidateUpload ? blockingVideo : null);
+  const resettableUpload = isResettableCandidateUpload
     ? blockingVideo
     : null;
 
   const canViewVideo = requestor.role === "super_admin" || requestor.role === "hr" || (requestor.role === "candidate" && room?.candidateUser?.authUserId === requestor.userId);
-  const signedUrl = canViewVideo && displayVideo && displayVideo.status !== "uploading"
-    ? await createSignedVideoUrl(displayVideo)
-    : null;
+  let signedUrl = null;
+  if (canViewVideo && displayVideo && displayVideo.status !== "uploading") {
+    try {
+      signedUrl = await createSignedVideoUrl(displayVideo);
+    } catch (err) {
+      console.warn("[CandidateVideo] Could not create signed playback URL:", err.message);
+    }
+  }
 
   let uploadAllowed = true;
   let reason = null;
@@ -1032,8 +1038,8 @@ app.post("/api/candidate-videos/:videoId/cancel-upload", async (req, res) => {
     if (!isOwningCandidate && !isAssignedHr) {
       return res.status(403).json({ error: "Candidate upload access required" });
     }
-    if (video.status !== "uploading") {
-      return res.status(409).json({ error: "Only in-progress uploads can be cancelled" });
+    if (video.source !== "candidate_upload" || !["uploading", "pending_review"].includes(video.status)) {
+      return res.status(409).json({ error: "Only in-progress or pending candidate uploads can be reset" });
     }
 
     await supabaseAdmin.storage

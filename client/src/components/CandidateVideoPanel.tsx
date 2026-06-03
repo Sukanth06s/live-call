@@ -383,13 +383,14 @@ export default function CandidateVideoPanel({
   if (!isCandidate && !isHr && !isSuperAdmin) return null;
 
   const currentVideo = videoState?.currentVideo;
-  const resettableVideo = videoState?.blockingVideo || (currentVideo?.status === "uploading" ? currentVideo : null);
+  const currentVideoCanReset = currentVideo?.source === "candidate_upload" && (currentVideo.status === "uploading" || currentVideo.status === "pending_review");
+  const resettableVideo = videoState?.blockingVideo || (currentVideoCanReset ? currentVideo : null);
   const showCandidateUpload = isCandidate && videoState?.uploadAllowed && !isUploading;
   const showPendingCandidateStatus = isCandidate && !videoState?.uploadAllowed && videoState?.reason;
   const showHrEmptyStatus = isHr && videoState && !currentVideo && !resettableVideo;
   const canReview = isHr && currentVideo?.source === "candidate_upload" && currentVideo.status === "pending_review" && currentVideo.signedUrl;
   const canViewAttachedVideo = Boolean(currentVideo?.signedUrl && currentVideo.status !== "uploading" && (isCandidate || isHr || isSuperAdmin));
-  const canResetUpload = Boolean((isCandidate || isHr) && resettableVideo?.status === "uploading");
+  const canResetUpload = Boolean((isCandidate || isHr) && resettableVideo && ["uploading", "pending_review"].includes(resettableVideo.status));
   const hasCandidateUploadPreview = Boolean(candidateUploadPreviewUrl && candidateUploadFile);
   const isWorkspaceLayout = layout === "workspace";
 
