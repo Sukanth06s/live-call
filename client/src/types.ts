@@ -4,6 +4,8 @@ export type UserRole = "candidate" | "hr" | "super_admin";
 export type RoomLanguage = "english" | "tamil" | "hindi";
 
 export type InterviewState = "waiting" | "active" | "transcribing" | "paused" | "ended";
+export type CandidateVideoSource = "candidate_upload" | "hr_recording";
+export type CandidateVideoStatus = "uploading" | "pending_review" | "approved" | "discarded";
 
 export interface RoomUser {
   id: string;          // Socket ID
@@ -58,9 +60,37 @@ export interface TranscriptBlock {
 export interface RoomState {
   roomId: string;
   language?: RoomLanguage;
+  interviewSessionId?: string | null;
   users: RoomUser[];
   blocks: TranscriptBlock[];
   activeTranscriptionSession?: ActiveTranscriptionSession;
   roomStateVersion?: number;
   state?: InterviewState;
+}
+
+export interface CandidateVideo {
+  id: string;
+  candidateUserId: string;
+  hrUserId?: string | null;
+  interviewId?: string | null;
+  source: CandidateVideoSource;
+  status: CandidateVideoStatus;
+  storageBucket: string;
+  storagePath: string;
+  fileName?: string | null;
+  mimeType: string;
+  fileSize?: number | null;
+  durationSeconds?: number | null;
+  approvedByUserId?: string | null;
+  approvedAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  signedUrl?: string | null;
+}
+
+export interface CandidateVideoState {
+  interviewId: string | null;
+  uploadAllowed: boolean;
+  reason?: string | null;
+  currentVideo?: CandidateVideo | null;
 }

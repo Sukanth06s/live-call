@@ -61,6 +61,9 @@ const activeDeepgramConnections = new Map(); // roomId -> { dgConnection, isDeep
 const transcriptionCountdowns = new Map(); // roomId -> countdown interval
 const allowedRoles = new Set(["candidate", "hr", "super_admin"]);
 const activeUserSockets = new Map(); // Supabase auth user id -> active socket id
+const candidateVideoBucket = "candidate-videos";
+const maxCandidateVideoBytes = 50 * 1024 * 1024;
+const allowedCandidateVideoMimes = new Set(["video/webm", "video/mp4"]);
 
 function createAgoraUid(userId, roomId, role) {
   const hash = crypto.createHash("sha256").update(`${userId}:${roomId}:${role}`).digest();
@@ -148,6 +151,303 @@ function getBearerToken(req) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) return null;
   return authHeader.split(" ")[1];
+}
+
+async function getAuthenticatedRequestContext(req) {
+  const token = getBearerToken(req);
+  if (!token) {
+    const err = new Error("No token provided");
+    err.status = 401;
+    throw err;
+  }
+
+  const user = await getAuthenticatedUserFromToken(token);
+  const profile = await getUserProfile(user);
+  return { user, profile };
+}
+
+function sendApiError(res, err, fallback = "Request failed") {
+  const status = err.status || 500;
+  if (status >= 500) console.error("[API Error]", err);
+  return res.status(status).json({ error: err.message || fallback });
+}
+
+function assertAllowedCandidateVideoFile({ mimeType, fileSize }) {
+  if (!allowedCandidateVideoMimes.has(mimeType)) {
+    const err = new Error("Only WebM and MP4 videos are allowed.");
+    err.status = 400;
+    throw err;
+  }
+
+  const parsedSize = Number(fileSize);
+  if (!Number.isFinite(parsedSize) || parsedSize <= 0) {
+    const err = new Error("A valid file size is required.");
+    err.status = 400;
+    throw err;
+  }
+
+  if (parsedSize > maxCandidateVideoBytes) {
+    const err = new Error("Video must be 50 MB or smaller.");
+    err.status = 413;
+    throw err;
+  }
+}
+
+function getVideoExtension(mimeType, fileName = "") {
+  const lowerName = String(fileName || "").toLowerCase();
+  if (mimeType === "video/mp4" || lowerName.endsWith(".mp4")) return "mp4";
+  return "webm";
+}
+
+function getVideoStoragePath({ candidateUserId, interviewId, source, videoId, mimeType, fileName }) {
+  const folder = source === "hr_recording" ? "hr_recording" : "candidate_upload";
+  const extension = getVideoExtension(mimeType, fileName);
+  return `${candidateUserId}/${interviewId}/${folder}/${videoId}.${extension}`;
+}
+
+function getEndedReason(reason) {
+  if (reason === "hr-disconnect") return "hr_disconnect_timeout";
+  if (reason === "candidate-left-before-hr") return "candidate_left_before_hr";
+  if (reason === "candidate-disconnect") return "candidate_disconnect_timeout";
+  if (reason === "system-error") return "system_error";
+  return "hr_ended";
+}
+
+async function createOrReuseActiveInterview(roomId, hrSocket) {
+  const room = getRoom(roomId);
+  if (!room?.candidateUser || !room.hrUser) return null;
+
+  const now = new Date().toISOString();
+  const basePayload = {
+    room_id: room.roomId,
+    hr_user_id: room.hrUser.authUserId || hrSocket.data.userId,
+    candidate_user_id: room.candidateUser.authUserId,
+    status: "active",
+    started_at: now,
+    ended_at: null,
+    updated_at: now,
+  };
+  const snapshotPayload = {
+    ...basePayload,
+    candidate_name_snapshot: room.candidateUser.name,
+    hr_name_snapshot: room.hrUser.name,
+    language: room.language,
+    ended_reason: null,
+  };
+
+  if (!room.interviewSessionId) {
+    let insertResult = await supabaseAdmin
+      .from("interviews")
+      .insert([snapshotPayload])
+      .select()
+      .single();
+
+    if (insertResult.error && /candidate_name_snapshot|hr_name_snapshot|language|ended_reason/i.test(insertResult.error.message || "")) {
+      insertResult = await supabaseAdmin
+        .from("interviews")
+        .insert([basePayload])
+        .select()
+        .single();
+    }
+
+    if (insertResult.error) throw insertResult.error;
+    room.interviewSessionId = insertResult.data.id;
+    room.state = "active";
+    console.log(`[DB] Created interview session ${room.interviewSessionId} for room ${roomId}`);
+    return insertResult.data;
+  }
+
+  let updateResult = await supabaseAdmin
+    .from("interviews")
+    .update(snapshotPayload)
+    .eq("id", room.interviewSessionId)
+    .select()
+    .single();
+
+  if (updateResult.error && /candidate_name_snapshot|hr_name_snapshot|language|ended_reason/i.test(updateResult.error.message || "")) {
+    updateResult = await supabaseAdmin
+      .from("interviews")
+      .update(basePayload)
+      .eq("id", room.interviewSessionId)
+      .select()
+      .single();
+  }
+
+  if (updateResult.error) throw updateResult.error;
+  room.state = "active";
+  return updateResult.data;
+}
+
+async function updateInterviewClosure(room, { status = "completed", reason = "hr_ended", finalTranscript = null } = {}) {
+  if (!room?.interviewSessionId) return null;
+  const now = new Date().toISOString();
+  const payload = {
+    status,
+    ended_at: now,
+    updated_at: now,
+  };
+  if (finalTranscript !== null) payload.final_transcript = finalTranscript;
+
+  const snapshotPayload = { ...payload, ended_reason: reason };
+  let result = await supabaseAdmin
+    .from("interviews")
+    .update(snapshotPayload)
+    .eq("id", room.interviewSessionId)
+    .select()
+    .single();
+
+  if (result.error && /ended_reason/i.test(result.error.message || "")) {
+    result = await supabaseAdmin
+      .from("interviews")
+      .update(payload)
+      .eq("id", room.interviewSessionId)
+      .select()
+      .single();
+  }
+
+  if (result.error) throw result.error;
+  return result.data;
+}
+
+function getRoomByInterviewId(interviewId) {
+  if (!interviewId) return null;
+  for (const room of getAllRooms()) {
+    const fullRoom = getRoom(room.roomId);
+    if (fullRoom?.interviewSessionId === interviewId) return fullRoom;
+  }
+  return null;
+}
+
+function assertRoomParticipant(room, userId, role) {
+  if (!room) {
+    const err = new Error("Room is no longer active.");
+    err.status = 404;
+    throw err;
+  }
+
+  if (role === "candidate" && room.candidateUser?.authUserId !== userId) {
+    const err = new Error("Candidate access required for this interview.");
+    err.status = 403;
+    throw err;
+  }
+
+  if (role === "hr" && room.hrUser?.authUserId !== userId) {
+    const err = new Error("Assigned HR access required for this interview.");
+    err.status = 403;
+    throw err;
+  }
+}
+
+async function getActiveCandidateVideo(candidateUserId) {
+  const { data, error } = await supabaseAdmin
+    .from("candidate_videos")
+    .select("*")
+    .eq("candidate_user_id", candidateUserId)
+    .in("status", ["uploading", "pending_review", "approved"])
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (error) throw error;
+  return data?.[0] || null;
+}
+
+async function getInterviewCandidateVideo(interviewId) {
+  const { data, error } = await supabaseAdmin
+    .from("candidate_videos")
+    .select("*")
+    .eq("interview_id", interviewId)
+    .in("status", ["uploading", "pending_review", "approved"])
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (error) throw error;
+  return data?.[0] || null;
+}
+
+async function createSignedVideoUrl(video) {
+  if (!video?.storage_path) return null;
+  const { data, error } = await supabaseAdmin.storage
+    .from(video.storage_bucket || candidateVideoBucket)
+    .createSignedUrl(video.storage_path, 60 * 60);
+  if (error) throw error;
+  return data?.signedUrl || null;
+}
+
+function mapVideoForClient(video, signedUrl = null) {
+  if (!video) return null;
+  return {
+    id: video.id,
+    candidateUserId: video.candidate_user_id,
+    hrUserId: video.hr_user_id,
+    interviewId: video.interview_id,
+    source: video.source,
+    status: video.status,
+    storageBucket: video.storage_bucket,
+    storagePath: video.storage_path,
+    fileName: video.file_name,
+    mimeType: video.mime_type,
+    fileSize: video.file_size,
+    durationSeconds: video.duration_seconds,
+    approvedByUserId: video.approved_by_user_id,
+    approvedAt: video.approved_at,
+    createdAt: video.created_at,
+    updatedAt: video.updated_at,
+    signedUrl,
+  };
+}
+
+async function buildCandidateVideoState(room, requestor) {
+  const candidateUserId = room?.candidateUser?.authUserId || room?.lastCandidateUser?.authUserId;
+  const currentVideo = room?.interviewSessionId ? await getInterviewCandidateVideo(room.interviewSessionId) : null;
+  const activeCandidateVideo = candidateUserId ? await getActiveCandidateVideo(candidateUserId) : null;
+  const blockingVideo = activeCandidateVideo || currentVideo;
+
+  const canViewVideo = requestor.role === "super_admin" || requestor.role === "hr";
+  const signedUrl = canViewVideo && currentVideo && currentVideo.status !== "uploading"
+    ? await createSignedVideoUrl(currentVideo)
+    : null;
+
+  let uploadAllowed = true;
+  let reason = null;
+
+  if (!room?.interviewSessionId) {
+    uploadAllowed = false;
+    reason = "Upload is available after HR joins the call.";
+  } else if (!room.hrUser) {
+    uploadAllowed = false;
+    reason = "Upload is available only while HR is present.";
+  } else if (requestor.role !== "candidate") {
+    uploadAllowed = false;
+    reason = "Only the candidate can upload verification videos.";
+  } else if (room.candidateUser?.authUserId !== requestor.userId) {
+    uploadAllowed = false;
+    reason = "This interview belongs to another candidate.";
+  } else if (blockingVideo?.status === "approved") {
+    uploadAllowed = false;
+    reason = "Candidate verification is already approved.";
+  } else if (blockingVideo?.status === "pending_review") {
+    uploadAllowed = false;
+    reason = "Your uploaded video is pending HR review.";
+  } else if (blockingVideo?.status === "uploading") {
+    uploadAllowed = false;
+    reason = "A video upload is already in progress.";
+  }
+
+  return {
+    interviewId: room?.interviewSessionId || null,
+    uploadAllowed,
+    reason,
+    currentVideo: mapVideoForClient(currentVideo, signedUrl),
+  };
+}
+
+async function emitCandidateVideoState(roomId) {
+  const room = getRoom(roomId);
+  if (!room) return;
+  const { regular, superAdmin } = getRoomSocketsByRole(roomId);
+  [...regular, ...superAdmin].forEach((socketId) => {
+    io.to(socketId).emit("candidate-video-updated", { roomId });
+  });
 }
 
 // Helper to broadcast projected room state based on roles
@@ -559,6 +859,255 @@ app.get("/api/rooms", async (req, res) => {
   }
 });
 
+app.get("/api/candidate-videos/state", async (req, res) => {
+  try {
+    const { user, profile } = await getAuthenticatedRequestContext(req);
+    const roomId = req.query.roomId;
+    const room = getRoom(roomId);
+    if (!room) return res.status(404).json({ error: "Room not found" });
+
+    if (profile.role === "candidate") assertRoomParticipant(room, user.id, "candidate");
+    if (profile.role === "hr") assertRoomParticipant(room, user.id, "hr");
+
+    const state = await buildCandidateVideoState(room, { userId: user.id, role: profile.role });
+    res.json(state);
+  } catch (err) {
+    sendApiError(res, err, "Could not load video state");
+  }
+});
+
+app.post("/api/candidate-videos/init-upload", async (req, res) => {
+  try {
+    const { user, profile } = await getAuthenticatedRequestContext(req);
+    const { roomId, fileName, mimeType, fileSize } = req.body || {};
+    if (profile.role !== "candidate") return res.status(403).json({ error: "Only candidates can upload verification videos" });
+    assertAllowedCandidateVideoFile({ mimeType, fileSize });
+
+    const room = getRoom(roomId);
+    assertRoomParticipant(room, user.id, "candidate");
+    const state = await buildCandidateVideoState(room, { userId: user.id, role: profile.role });
+    if (!state.uploadAllowed) return res.status(409).json({ error: state.reason || "Upload is not allowed right now" });
+
+    const videoId = crypto.randomUUID();
+    const storagePath = getVideoStoragePath({
+      candidateUserId: user.id,
+      interviewId: room.interviewSessionId,
+      source: "candidate_upload",
+      videoId,
+      mimeType,
+      fileName,
+    });
+
+    const { data: signedUpload, error: signedError } = await supabaseAdmin.storage
+      .from(candidateVideoBucket)
+      .createSignedUploadUrl(storagePath);
+    if (signedError) throw signedError;
+
+    const { data: video, error: insertError } = await supabaseAdmin
+      .from("candidate_videos")
+      .insert([{
+        id: videoId,
+        candidate_user_id: user.id,
+        hr_user_id: room.hrUser?.authUserId || null,
+        interview_id: room.interviewSessionId,
+        room_id: room.roomId,
+        source: "candidate_upload",
+        status: "uploading",
+        storage_bucket: candidateVideoBucket,
+        storage_path: storagePath,
+        file_name: fileName || null,
+        mime_type: mimeType,
+        file_size: Number(fileSize),
+        uploaded_by_user_id: user.id,
+      }])
+      .select()
+      .single();
+    if (insertError) throw insertError;
+
+    res.json({ video: mapVideoForClient(video), upload: signedUpload });
+  } catch (err) {
+    sendApiError(res, err, "Could not initialize upload");
+  }
+});
+
+app.post("/api/candidate-videos/hr-recording/init-upload", async (req, res) => {
+  try {
+    const { user, profile } = await getAuthenticatedRequestContext(req);
+    const { roomId, fileName, mimeType, fileSize, durationSeconds } = req.body || {};
+    if (profile.role !== "hr") return res.status(403).json({ error: "Only HR can save candidate recordings" });
+    assertAllowedCandidateVideoFile({ mimeType, fileSize });
+
+    const room = getRoom(roomId);
+    assertRoomParticipant(room, user.id, "hr");
+    if (!room.interviewSessionId || !room.candidateUser || !room.hrUser) {
+      return res.status(409).json({ error: "Recording can be saved only during an active interview" });
+    }
+
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from("candidate_videos")
+      .select("id, status")
+      .eq("interview_id", room.interviewSessionId)
+      .eq("source", "hr_recording")
+      .in("status", ["uploading", "pending_review", "approved"])
+      .limit(1);
+    if (existingError) throw existingError;
+    if (existing?.length) return res.status(409).json({ error: "A recording has already been saved or is being saved for this interview" });
+
+    const videoId = crypto.randomUUID();
+    const storagePath = getVideoStoragePath({
+      candidateUserId: room.candidateUser.authUserId,
+      interviewId: room.interviewSessionId,
+      source: "hr_recording",
+      videoId,
+      mimeType,
+      fileName,
+    });
+
+    const { data: signedUpload, error: signedError } = await supabaseAdmin.storage
+      .from(candidateVideoBucket)
+      .createSignedUploadUrl(storagePath);
+    if (signedError) throw signedError;
+
+    const { data: video, error: insertError } = await supabaseAdmin
+      .from("candidate_videos")
+      .insert([{
+        id: videoId,
+        candidate_user_id: room.candidateUser.authUserId,
+        hr_user_id: user.id,
+        interview_id: room.interviewSessionId,
+        room_id: room.roomId,
+        source: "hr_recording",
+        status: "uploading",
+        storage_bucket: candidateVideoBucket,
+        storage_path: storagePath,
+        file_name: fileName || null,
+        mime_type: mimeType,
+        file_size: Number(fileSize),
+        duration_seconds: durationSeconds || null,
+        uploaded_by_user_id: user.id,
+      }])
+      .select()
+      .single();
+    if (insertError) throw insertError;
+
+    res.json({ video: mapVideoForClient(video), upload: signedUpload });
+  } catch (err) {
+    sendApiError(res, err, "Could not initialize recording upload");
+  }
+});
+
+app.post("/api/candidate-videos/:videoId/complete-upload", async (req, res) => {
+  try {
+    const { user, profile } = await getAuthenticatedRequestContext(req);
+    const { videoId } = req.params;
+    const { data: video, error } = await supabaseAdmin
+      .from("candidate_videos")
+      .select("*")
+      .eq("id", videoId)
+      .single();
+    if (error) throw error;
+    if (video.status !== "uploading") return res.status(409).json({ error: "Upload has already been completed" });
+
+    const room = getRoomByInterviewId(video.interview_id);
+    if (video.source === "candidate_upload") {
+      if (profile.role !== "candidate" || video.candidate_user_id !== user.id) return res.status(403).json({ error: "Candidate upload access required" });
+      assertRoomParticipant(room, user.id, "candidate");
+    } else {
+      if (profile.role !== "hr" || video.hr_user_id !== user.id) return res.status(403).json({ error: "HR recording access required" });
+      assertRoomParticipant(room, user.id, "hr");
+    }
+
+    const nextStatus = video.source === "hr_recording" ? "approved" : "pending_review";
+    const updatePayload = {
+      status: nextStatus,
+      updated_at: new Date().toISOString(),
+    };
+    if (nextStatus === "approved") {
+      updatePayload.approved_by_user_id = user.id;
+      updatePayload.approved_at = new Date().toISOString();
+    }
+
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from("candidate_videos")
+      .update(updatePayload)
+      .eq("id", videoId)
+      .select()
+      .single();
+    if (updateError) throw updateError;
+
+    if (room) await emitCandidateVideoState(room.roomId);
+    res.json({ video: mapVideoForClient(updated) });
+  } catch (err) {
+    sendApiError(res, err, "Could not complete upload");
+  }
+});
+
+app.post("/api/candidate-videos/:videoId/approve", async (req, res) => {
+  try {
+    const { user, profile } = await getAuthenticatedRequestContext(req);
+    if (profile.role !== "hr") return res.status(403).json({ error: "Only HR can approve videos" });
+    const { videoId } = req.params;
+    const { data: video, error } = await supabaseAdmin
+      .from("candidate_videos")
+      .select("*")
+      .eq("id", videoId)
+      .single();
+    if (error) throw error;
+    const room = getRoomByInterviewId(video.interview_id);
+    assertRoomParticipant(room, user.id, "hr");
+    if (video.status !== "pending_review") return res.status(409).json({ error: "Only pending videos can be approved" });
+
+    const now = new Date().toISOString();
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from("candidate_videos")
+      .update({ status: "approved", approved_by_user_id: user.id, approved_at: now, updated_at: now })
+      .eq("id", videoId)
+      .select()
+      .single();
+    if (updateError) throw updateError;
+
+    if (room) await emitCandidateVideoState(room.roomId);
+    res.json({ video: mapVideoForClient(updated) });
+  } catch (err) {
+    sendApiError(res, err, "Could not approve video");
+  }
+});
+
+app.post("/api/candidate-videos/:videoId/dismiss", async (req, res) => {
+  try {
+    const { user, profile } = await getAuthenticatedRequestContext(req);
+    if (profile.role !== "hr") return res.status(403).json({ error: "Only HR can dismiss videos" });
+    const { videoId } = req.params;
+    const { data: video, error } = await supabaseAdmin
+      .from("candidate_videos")
+      .select("*")
+      .eq("id", videoId)
+      .single();
+    if (error) throw error;
+    const room = getRoomByInterviewId(video.interview_id);
+    assertRoomParticipant(room, user.id, "hr");
+    if (video.status !== "pending_review") return res.status(409).json({ error: "Only pending videos can be dismissed" });
+
+    const removeResult = await supabaseAdmin.storage
+      .from(video.storage_bucket || candidateVideoBucket)
+      .remove([video.storage_path]);
+    if (removeResult.error) throw removeResult.error;
+
+    const now = new Date().toISOString();
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from("candidate_videos")
+      .update({ status: "discarded", discarded_at: now, updated_at: now })
+      .eq("id", videoId)
+      .select()
+      .single();
+    if (updateError) throw updateError;
+
+    if (room) await emitCandidateVideoState(room.roomId);
+    res.json({ video: mapVideoForClient(updated) });
+  } catch (err) {
+    sendApiError(res, err, "Could not dismiss video");
+  }
+});
 io.on("connection", (socket) => {
   const existingSocketId = activeUserSockets.get(socket.data.userId);
   if (existingSocketId && existingSocketId !== socket.id) {
@@ -684,10 +1233,21 @@ io.on("connection", (socket) => {
     joinRoom(roomId, socket.id, durableName, socket.data.userId, requestedRole, socket.data.agoraUid);
     socket.join(roomId);
 
+    if (requestedRole === "hr") {
+      try {
+        await createOrReuseActiveInterview(roomId, socket);
+      } catch (err) {
+        console.error("[DB Error] Failed to create/reuse interview on HR join:", err);
+        socket.emit("join-error", "Could not create the interview session.");
+        return;
+      }
+    }
+
     await hydrateRoomWithLatestCandidateTranscript(roomId);
 
     socket.emit("join-ack", { roomId, role: requestedRole });
     broadcastProjectedRoomState(roomId);
+    await emitCandidateVideoState(roomId);
   });
 
   socket.on("start-transcription", async ({ roomId }) => {
@@ -698,53 +1258,25 @@ io.on("connection", (socket) => {
     }
     
     const room = getRoom(roomId);
-    if (!room || room.state === "active" || room.state === "transcribing" || room.activeTranscriptionSession.isActive || transcriptionCountdowns.has(roomId)) return;
+    if (!room || room.state === "transcribing" || room.activeTranscriptionSession.isActive || transcriptionCountdowns.has(roomId)) return;
     if (!room.candidateUser) {
       socket.emit("transcript-save-error", "Candidate must be in the room before transcription can start.");
       return;
+    }
+    if (!room.interviewSessionId) {
+      try {
+        await createOrReuseActiveInterview(roomId, socket);
+      } catch (err) {
+        console.error("[DB Error] Failed to create interview before transcription:", err);
+        socket.emit("transcript-save-error", "Interview session is not ready yet.");
+        return;
+      }
     }
 
     room.state = "active";
     room.activeTranscriptionSession.isActive = false;
     room.activeTranscriptionSession.startedBy = socket.data.userId;
     room.activeTranscriptionSession.targetSpeakerId = room.candidateUser?.id;
-
-    // Soft Recovery: Immediately create or reactivate the interview row.
-    try {
-      if (!room.interviewSessionId) {
-        const { data, error } = await supabaseAdmin
-          .from('interviews')
-          .insert([{
-            room_id: roomId,
-            hr_user_id: socket.data.userId,
-            candidate_user_id: room.candidateUser.authUserId,
-            status: 'active',
-            started_at: new Date().toISOString()
-          }])
-          .select()
-          .single();
-
-        if (!error && data) {
-          room.interviewSessionId = data.id;
-          console.log(`[DB] Created interview session: ${data.id}`);
-        } else {
-          console.error("[DB Error] Failed to create interview:", error);
-        }
-      } else {
-        const { error } = await supabaseAdmin
-          .from('interviews')
-          .update({
-            status: 'active',
-            hr_user_id: socket.data.userId,
-            candidate_user_id: room.candidateUser.authUserId,
-            ended_at: null,
-          })
-          .eq("id", room.interviewSessionId);
-        if (error) console.error("[DB Error] Failed to reactivate interview:", error);
-      }
-    } catch (e) {
-      console.error("[DB Catch] Error creating/reactivating interview:", e);
-    }
 
     io.to(roomId).emit("transcription-starting", { countdown: 10 });
     
@@ -814,12 +1346,14 @@ io.on("connection", (socket) => {
 
     io.to(roomId).emit("room-closed", "The interview has ended. The session is closed.");
 
-    if ((room.blocks || []).some((block) => (block.content || "").trim()) && (room.candidateUser || room.lastCandidateUser)) {
-      try {
+    try {
+      if ((room.blocks || []).some((block) => (block.content || "").trim()) && (room.candidateUser || room.lastCandidateUser)) {
         await persistRoomTranscript(room, { savedByUserId: socket.data.userId, reason: "interview-ended" });
-      } catch (err) {
-        console.error("[DB Error] End interview persistence failed:", err);
+      } else {
+        await updateInterviewClosure(room, { status: "completed", reason: "hr_ended", finalTranscript: "" });
       }
+    } catch (err) {
+      console.error("[DB Error] End interview persistence failed:", err);
     }
 
     const { regular, superAdmin } = getRoomSocketsByRole(roomId);
@@ -848,7 +1382,7 @@ io.on("connection", (socket) => {
       try {
         const { error } = await supabaseAdmin
           .from("interviews")
-          .update({ status: "paused", updated_at: new Date().toISOString() })
+          .update({ updated_at: new Date().toISOString() })
           .eq("id", room.interviewSessionId);
         if (error) console.error("[DB Error] Failed to pause interview:", error);
       } catch (err) {
@@ -1114,9 +1648,12 @@ function handleLeave(socket) {
       
       if ((room.blocks || []).some((block) => (block.content || "").trim()) && (room.candidateUser || room.lastCandidateUser)) {
         persistRoomTranscript(room, { savedByUserId: socket.data.userId, reason: "hr-disconnect" })
+          .then(() => updateInterviewClosure(room, { status: "cancelled", reason: "hr_disconnect_timeout" }))
           .then(() => console.log(`[DB] Successfully closed session on HR disconnect: ${room.interviewSessionId}`))
           .catch(err => console.error("[DB Error] HR disconnect persistence failed:", err));
       } else {
+        updateInterviewClosure(room, { status: "cancelled", reason: "hr_disconnect_timeout", finalTranscript: "" })
+          .catch(err => console.error("[DB Error] HR disconnect status update failed:", err));
         console.log(`[DB] Skipped HR disconnect persistence for room ${roomId}: no candidate transcript to save.`);
       }
       

@@ -7,11 +7,22 @@ import TranscriptPanel from "./TranscriptPanel";
 import MuteButton from "./MuteButton";
 import ConnectionStatus from "./ConnectionStatus";
 import VideoPlayer, { VideoTrackLike } from "./VideoPlayer";
+import CandidateVideoPanel from "./CandidateVideoPanel";
 import { RoomUser, TranscriptBlock } from "@/types";
+
+interface RemoteAudioTrackLike {
+  getMediaStreamTrack?: () => MediaStreamTrack;
+}
 
 interface AgoraRemoteUserLike {
   uid?: string | number;
+  audioTrack?: RemoteAudioTrackLike;
   videoTrack?: VideoTrackLike;
+}
+
+interface SocketLike {
+  on: (event: string, callback: (payload: { roomId?: string }) => void) => void;
+  off: (event: string, callback: (payload: { roomId?: string }) => void) => void;
 }
 
 interface RoomPageProps {
@@ -23,6 +34,8 @@ interface RoomPageProps {
   userRole?: string;
   localCameraTrack?: VideoTrackLike | null;
   remoteUsers?: AgoraRemoteUserLike[];
+  accessToken?: string;
+  socket?: SocketLike | null;
   isMuted: boolean;
   isVideoEnabled: boolean;
   isConnected: boolean;
@@ -61,6 +74,8 @@ export default function RoomPage({
   userRole,
   localCameraTrack,
   remoteUsers = [],
+  accessToken,
+  socket,
   isMuted,
   isVideoEnabled,
   isConnected,
@@ -386,6 +401,16 @@ export default function RoomPage({
               </div>
             </section>
           )}
+
+          <CandidateVideoPanel
+            roomId={roomId}
+            accessToken={accessToken}
+            userRole={resolvedRole}
+            users={users}
+            currentUserId={currentUserId}
+            remoteUsers={remoteUsers}
+            socket={socket}
+          />
 
           <div className="min-h-[360px] flex-1 overflow-hidden pb-4 sm:min-h-[420px] lg:min-h-0 lg:pb-0">
             <TranscriptPanel

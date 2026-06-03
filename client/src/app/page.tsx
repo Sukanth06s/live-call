@@ -446,6 +446,8 @@ export default function Home() {
       userRole={userRole}
       localCameraTrack={getCameraTrack()}
       remoteUsers={remoteUsers}
+      accessToken={accessToken}
+      socket={socket}
       isMuted={isMuted}
       isVideoEnabled={isVideoEnabled}
       isConnected={isConnected}

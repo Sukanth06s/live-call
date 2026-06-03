@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 export interface VideoTrackLike {
   play: (element: HTMLElement) => void;
   stop?: () => void;
+  getMediaStreamTrack?: () => MediaStreamTrack;
 }
 
 interface VideoPlayerProps {
