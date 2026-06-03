@@ -564,14 +564,9 @@ io.on("connection", (socket) => {
   if (existingSocketId && existingSocketId !== socket.id) {
     const existingSocket = io.sockets.sockets.get(existingSocketId);
     if (existingSocket) {
-      if (existingSocket.data.roomId) {
-        existingSocket.data.pendingReplacementSocketId = socket.id;
-      } else {
-        existingSocket.data.isBeingReplaced = true;
-        existingSocket.data.replacedBySocketId = socket.id;
-        existingSocket.emit("force-logout", "This account was signed in from another device. You have been logged out here.");
-        existingSocket.disconnect(true);
-      }
+      existingSocket.data.replacedBySocketId = socket.id;
+      existingSocket.emit("force-logout", "This account was signed in from another device. You have been logged out here.");
+      existingSocket.disconnect(true);
     }
   }
   activeUserSockets.set(socket.data.userId, socket.id);
