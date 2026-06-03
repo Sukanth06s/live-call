@@ -505,7 +505,7 @@ export default function CandidateVideoPanel({
     <>
     <section
       className={`shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/50 px-3 py-3 backdrop-blur-md sm:px-4 lg:px-6 ${
-        isWorkspaceLayout ? "lg:h-full lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r lg:px-5" : ""
+        isWorkspaceLayout ? "lg:min-h-0 lg:border-b-0 lg:border-r lg:px-5" : ""
       }`}
     >
       <div
@@ -596,7 +596,7 @@ export default function CandidateVideoPanel({
                 src={currentVideo?.signedUrl || undefined}
                 controls
                 className={`w-full rounded-lg bg-black object-contain ${
-                  isWorkspaceLayout ? "max-h-[320px] lg:max-h-[min(34dvh,260px)]" : "max-h-[320px]"
+                  isWorkspaceLayout ? "max-h-[320px] lg:max-h-[min(46dvh,360px)]" : "max-h-[320px]"
                 }`}
               />
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">

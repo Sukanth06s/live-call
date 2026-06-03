@@ -342,7 +342,7 @@ export default function RoomPage({
         transition={{ delay: 0.15 }}
         className="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-hidden"
       >
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:flex lg:flex-col lg:overflow-hidden">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:flex lg:flex-col lg:overflow-y-auto">
           <header className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/70 px-3 py-2.5 backdrop-blur-md sm:px-4 lg:hidden">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
@@ -402,7 +402,7 @@ export default function RoomPage({
             </section>
           )}
 
-          <div className="min-h-0 flex-1 lg:grid lg:grid-cols-[minmax(420px,0.95fr)_minmax(0,1.05fr)] lg:overflow-hidden">
+          <div className="min-h-0 flex-1 lg:grid lg:grid-cols-[minmax(420px,0.95fr)_minmax(0,1.05fr)] lg:items-start lg:overflow-visible">
             <CandidateVideoPanel
               roomId={roomId}
               accessToken={accessToken}
@@ -414,7 +414,7 @@ export default function RoomPage({
               layout="workspace"
             />
 
-            <div className="min-h-[360px] flex-1 overflow-hidden pb-4 sm:min-h-[420px] lg:min-h-0 lg:pb-0">
+            <div className="min-h-[360px] flex-1 overflow-hidden pb-4 sm:min-h-[420px] lg:sticky lg:top-0 lg:h-[100dvh] lg:min-h-0 lg:pb-0">
               <TranscriptPanel
                 blocks={blocks}
                 currentUserName={userName}
