@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { supabase } from "@/lib/supabase";
 import { CandidateVideoState, RoomUser } from "@/types";
 
 type RemoteTrackLike = {
@@ -34,6 +33,7 @@ interface CandidateVideoPanelProps {
 
 const maxVideoBytes = 50 * 1024 * 1024;
 const allowedMimeTypes = new Set(["video/webm", "video/mp4"]);
+const storageBucketName = "candidate-videos";
 
 function getSocketUrl() {
   let socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
@@ -47,6 +47,43 @@ function formatBytes(bytes?: number | null) {
   if (!bytes) return "";
   const mb = bytes / (1024 * 1024);
   return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
+}
+
+function getSignedUploadUrl(upload: { path: string; token: string; signedUrl?: string }) {
+  if (upload.signedUrl) return upload.signedUrl;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!supabaseUrl) throw new Error("Supabase URL is not configured.");
+  return `${supabaseUrl}/storage/v1/object/upload/sign/${storageBucketName}/${upload.path}?token=${upload.token}`;
+}
+
+function uploadToSignedUrlWithProgress(
+  upload: { path: string; token: string; signedUrl?: string },
+  file: Blob,
+  onProgress: (progress: number) => void
+) {
+  return new Promise<void>((resolve, reject) => {
+    const formData = new FormData();
+    formData.append("cacheControl", "3600");
+    formData.append("", file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", getSignedUploadUrl(upload));
+    xhr.setRequestHeader("x-upsert", "false");
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(100);
+        resolve();
+      } else {
+        reject(new Error(`Storage upload failed (${xhr.status}): ${xhr.responseText || xhr.statusText}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Storage upload failed. Check your network and bucket settings."));
+    xhr.send(formData);
+  });
 }
 
 function formatTime(seconds: number) {
@@ -67,6 +104,8 @@ export default function CandidateVideoPanel({
   const [isLoadingState, setIsLoadingState] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadPhase, setUploadPhase] = useState<string | null>(null);
   const [recordingState, setRecordingState] = useState<RecordingState>("idle");
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
@@ -172,12 +211,16 @@ export default function CandidateVideoPanel({
     }
   }, [recordingState, stopRecording, users]);
 
-  const uploadToSignedUrl = useCallback(async (upload: { path: string; token: string }, file: Blob) => {
-    const { error } = await supabase.storage
-      .from("candidate-videos")
-      .uploadToSignedUrl(upload.path, upload.token, file);
-    if (error) throw error;
-  }, []);
+  const cancelUpload = useCallback(async (videoId: string) => {
+    setMessage(null);
+    try {
+      await apiFetch(`/api/candidate-videos/${videoId}/cancel-upload`, { method: "POST" });
+      setMessage("The in-progress upload was reset. You can upload again.");
+      await refreshVideoState();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  }, [apiFetch, refreshVideoState]);
 
   const handleCandidateFile = async (file: File | null) => {
     if (!file) return;
@@ -192,19 +235,33 @@ export default function CandidateVideoPanel({
     }
 
     setIsUploading(true);
+    setUploadProgress(0);
+    setUploadPhase("Preparing upload...");
+    let initializedVideoId: string | null = null;
     try {
       const init = await apiFetch("/api/candidate-videos/init-upload", {
         method: "POST",
         body: JSON.stringify({ roomId, fileName: file.name, mimeType: file.type, fileSize: file.size }),
       });
-      await uploadToSignedUrl(init.upload, file);
+      initializedVideoId = init.video.id;
+      setUploadPhase("Uploading to secure storage...");
+      await uploadToSignedUrlWithProgress(init.upload, file, setUploadProgress);
+      setUploadPhase("Finalizing upload...");
       await apiFetch(`/api/candidate-videos/${init.video.id}/complete-upload`, { method: "POST" });
       setMessage("Verification video uploaded for HR review.");
       await refreshVideoState();
     } catch (err) {
+      if (initializedVideoId) {
+        try {
+          await apiFetch(`/api/candidate-videos/${initializedVideoId}/cancel-upload`, { method: "POST" });
+        } catch (cleanupErr) {
+          console.warn("Could not clean up failed upload", cleanupErr);
+        }
+      }
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setIsUploading(false);
+      setUploadPhase(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -288,7 +345,10 @@ export default function CandidateVideoPanel({
           durationSeconds: recordingSeconds,
         }),
       });
-      await uploadToSignedUrl(init.upload, recordingBlob);
+      setUploadProgress(0);
+      setUploadPhase("Saving recording...");
+      await uploadToSignedUrlWithProgress(init.upload, recordingBlob, setUploadProgress);
+      setUploadPhase("Finalizing recording...");
       await apiFetch(`/api/candidate-videos/${init.video.id}/complete-upload`, { method: "POST" });
       discardPreview();
       setRecordingState("saved");
@@ -297,6 +357,8 @@ export default function CandidateVideoPanel({
     } catch (err) {
       setRecordingState("preview");
       setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploadPhase(null);
     }
   };
 
@@ -307,6 +369,7 @@ export default function CandidateVideoPanel({
   const showPendingCandidateStatus = isCandidate && !videoState?.uploadAllowed && videoState?.reason;
   const canReview = isHr && currentVideo?.source === "candidate_upload" && currentVideo.status === "pending_review" && currentVideo.signedUrl;
   const canViewApproved = (isHr || isSuperAdmin) && currentVideo?.status === "approved" && currentVideo.signedUrl;
+  const canResetUpload = isCandidate && currentVideo?.status === "uploading";
 
   const recordingPreviewModal = isMounted && (recordingState === "preview" || recordingState === "saving") && previewUrl
     ? createPortal(
@@ -345,7 +408,7 @@ export default function CandidateVideoPanel({
                   disabled={recordingState === "saving"}
                   className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {recordingState === "saving" ? "Saving..." : "Save"}
+                  {recordingState === "saving" ? `${uploadPhase || "Saving..."} ${uploadProgress}%` : "Save"}
                 </button>
               </div>
             </div>
@@ -401,9 +464,25 @@ export default function CandidateVideoPanel({
           )}
 
           {isUploading && (
-            <div className="mt-4 rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-4 py-3 text-xs text-indigo-200">
-              Uploading video to secure storage...
+            <div className="mt-4 rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-4 py-3 text-xs text-indigo-100">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span>{uploadPhase || "Uploading video..."}</span>
+                <span className="font-mono font-bold">{uploadProgress}%</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-black/30">
+                <div className="h-full rounded-full bg-indigo-400 transition-all" style={{ width: `${uploadProgress}%` }} />
+              </div>
             </div>
+          )}
+
+          {canResetUpload && (
+            <button
+              type="button"
+              onClick={() => void cancelUpload(currentVideo.id)}
+              className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-200 transition hover:bg-amber-500/20"
+            >
+              Reset Upload
+            </button>
           )}
 
           {showPendingCandidateStatus && (

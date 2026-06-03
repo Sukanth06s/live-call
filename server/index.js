@@ -22,6 +22,7 @@ const {
   joinRoom,
   leaveRoom,
   getRoom,
+  getAllRooms,
   getRoomsForRole,
   getProjectedRoomState,
   bumpRoomStateVersion,
@@ -996,6 +997,44 @@ app.post("/api/candidate-videos/hr-recording/init-upload", async (req, res) => {
   }
 });
 
+
+app.post("/api/candidate-videos/:videoId/cancel-upload", async (req, res) => {
+  try {
+    const { user, profile } = await getAuthenticatedRequestContext(req);
+    const { videoId } = req.params;
+    const { data: video, error } = await supabaseAdmin
+      .from("candidate_videos")
+      .select("*")
+      .eq("id", videoId)
+      .single();
+    if (error) throw error;
+    if (profile.role !== "candidate" || video.candidate_user_id !== user.id) {
+      return res.status(403).json({ error: "Candidate upload access required" });
+    }
+    if (video.status !== "uploading") {
+      return res.status(409).json({ error: "Only in-progress uploads can be cancelled" });
+    }
+
+    await supabaseAdmin.storage
+      .from(video.storage_bucket || candidateVideoBucket)
+      .remove([video.storage_path]);
+
+    const now = new Date().toISOString();
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from("candidate_videos")
+      .update({ status: "discarded", discarded_at: now, updated_at: now })
+      .eq("id", videoId)
+      .select()
+      .single();
+    if (updateError) throw updateError;
+
+    const room = getRoomByInterviewId(video.interview_id);
+    if (room) await emitCandidateVideoState(room.roomId);
+    res.json({ video: mapVideoForClient(updated) });
+  } catch (err) {
+    sendApiError(res, err, "Could not cancel upload");
+  }
+});
 app.post("/api/candidate-videos/:videoId/complete-upload", async (req, res) => {
   try {
     const { user, profile } = await getAuthenticatedRequestContext(req);
