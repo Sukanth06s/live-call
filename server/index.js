@@ -404,10 +404,11 @@ async function buildCandidateVideoState(room, requestor) {
   const currentVideo = room?.interviewSessionId ? await getInterviewCandidateVideo(room.interviewSessionId) : null;
   const activeCandidateVideo = candidateUserId ? await getActiveCandidateVideo(candidateUserId) : null;
   const blockingVideo = activeCandidateVideo || currentVideo;
+  const displayVideo = currentVideo || (blockingVideo?.status === "uploading" ? blockingVideo : null);
 
   const canViewVideo = requestor.role === "super_admin" || requestor.role === "hr" || (requestor.role === "candidate" && room?.candidateUser?.authUserId === requestor.userId);
-  const signedUrl = canViewVideo && currentVideo && currentVideo.status !== "uploading"
-    ? await createSignedVideoUrl(currentVideo)
+  const signedUrl = canViewVideo && displayVideo && displayVideo.status !== "uploading"
+    ? await createSignedVideoUrl(displayVideo)
     : null;
 
   let uploadAllowed = true;
@@ -440,7 +441,7 @@ async function buildCandidateVideoState(room, requestor) {
     interviewId: room?.interviewSessionId || null,
     uploadAllowed,
     reason,
-    currentVideo: mapVideoForClient(currentVideo, signedUrl),
+    currentVideo: mapVideoForClient(displayVideo, signedUrl),
   };
 }
 
