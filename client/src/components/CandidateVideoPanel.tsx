@@ -386,6 +386,7 @@ export default function CandidateVideoPanel({
   const canReview = isHr && currentVideo?.source === "candidate_upload" && currentVideo.status === "pending_review" && currentVideo.signedUrl;
   const canViewAttachedVideo = Boolean(currentVideo?.signedUrl && currentVideo.status !== "uploading" && (isCandidate || isHr || isSuperAdmin));
   const canResetUpload = isCandidate && currentVideo?.status === "uploading";
+  const hasCandidateUploadPreview = Boolean(candidateUploadPreviewUrl && candidateUploadFile);
 
   const recordingPreviewModal = isMounted && (recordingState === "preview" || recordingState === "saving") && previewUrl
     ? createPortal(
@@ -425,6 +426,69 @@ export default function CandidateVideoPanel({
                   className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {recordingState === "saving" ? `${uploadPhase || "Saving..."} ${uploadProgress}%` : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )
+    : null;
+
+  const candidateUploadPreviewModal = isMounted && hasCandidateUploadPreview
+    ? createPortal(
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-black/90 p-3 sm:p-4">
+          <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b10] shadow-2xl sm:max-h-[calc(100dvh-2rem)]">
+            <div className="shrink-0 border-b border-white/10 px-4 py-3 sm:px-5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-base font-bold text-white">Upload Preview</h2>
+                  <p className="text-xs text-gray-500">Review the selected verification video before saving it.</p>
+                </div>
+                <span className="shrink-0 text-xs text-gray-500">{formatBytes(candidateUploadFile?.size)}</span>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 sm:px-5">
+              {message && (
+                <div className="mb-3 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2 text-xs text-gray-300">
+                  {message}
+                </div>
+              )}
+              <video
+                src={candidateUploadPreviewUrl || undefined}
+                controls
+                className="mx-auto max-h-[min(56dvh,520px)] w-full rounded-xl bg-black object-contain"
+              />
+              <div className="mt-3 truncate text-xs text-gray-500">{candidateUploadFile?.name}</div>
+            </div>
+            <div className="shrink-0 border-t border-white/10 bg-[#0b0b10] px-4 py-3 sm:px-5">
+              {isUploading && (
+                <div className="mb-3 rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-4 py-3 text-xs text-indigo-100">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span>{uploadPhase || "Uploading video..."}</span>
+                    <span className="font-mono font-bold">{uploadProgress}%</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-black/30">
+                    <div className="h-full rounded-full bg-indigo-400 transition-all" style={{ width: `${uploadProgress}%` }} />
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={clearCandidateUploadPreview}
+                  disabled={isUploading}
+                  className="rounded-lg border border-white/10 px-4 py-2 text-xs font-bold text-gray-300 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Delete
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void uploadSelectedCandidateFile()}
+                  disabled={isUploading}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isUploading ? "Saving..." : "Save Upload"}
                 </button>
               </div>
             </div>
@@ -479,36 +543,15 @@ export default function CandidateVideoPanel({
             </div>
           )}
 
-          {candidateUploadPreviewUrl && candidateUploadFile && (
-            <div className="mt-4 space-y-3 rounded-xl border border-white/[0.06] bg-black/20 p-3">
-              <video src={candidateUploadPreviewUrl} controls className="max-h-[320px] w-full rounded-lg bg-black" />
-              <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500">
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="truncate">{candidateUploadFile.name}</span>
-                  <span>{formatBytes(candidateUploadFile.size)}</span>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={clearCandidateUploadPreview}
-                    disabled={isUploading}
-                    className="rounded-lg border border-white/10 px-3 py-2 text-xs font-bold text-gray-300 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Delete
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void uploadSelectedCandidateFile()}
-                    disabled={isUploading}
-                    className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Save Upload
-                  </button>
-                </div>
+          {hasCandidateUploadPreview && (
+            <div className="mt-4 rounded-xl border border-white/[0.06] bg-black/20 px-4 py-3 text-xs text-gray-400">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className="min-w-0 truncate">{candidateUploadFile?.name}</span>
+                <span className="shrink-0 text-emerald-300">Preview open</span>
               </div>
             </div>
           )}
-          {isUploading && (
+          {isUploading && !hasCandidateUploadPreview && (
             <div className="mt-4 rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-4 py-3 text-xs text-indigo-100">
               <div className="mb-2 flex items-center justify-between gap-3">
                 <span>{uploadPhase || "Uploading video..."}</span>
@@ -602,6 +645,7 @@ export default function CandidateVideoPanel({
       </div>
     </section>
     {recordingPreviewModal}
+    {candidateUploadPreviewModal}
     </>
   );
 }
