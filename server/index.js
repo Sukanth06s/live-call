@@ -319,6 +319,17 @@ function getRoomByInterviewId(interviewId) {
   return null;
 }
 
+function getRoomByCandidateAndHr(candidateUserId, hrUserId) {
+  if (!candidateUserId || !hrUserId) return null;
+  for (const room of getAllRooms()) {
+    const fullRoom = getRoom(room.roomId);
+    if (fullRoom?.candidateUser?.authUserId === candidateUserId && fullRoom.hrUser?.authUserId === hrUserId) {
+      return fullRoom;
+    }
+  }
+  return null;
+}
+
 function assertRoomParticipant(room, userId, role) {
   if (!room) {
     const err = new Error("Room is no longer active.");
@@ -405,6 +416,9 @@ async function buildCandidateVideoState(room, requestor) {
   const activeCandidateVideo = candidateUserId ? await getActiveCandidateVideo(candidateUserId) : null;
   const blockingVideo = activeCandidateVideo || currentVideo;
   const displayVideo = currentVideo || (blockingVideo?.status === "uploading" ? blockingVideo : null);
+  const resettableUpload = blockingVideo?.source === "candidate_upload" && blockingVideo.status === "uploading"
+    ? blockingVideo
+    : null;
 
   const canViewVideo = requestor.role === "super_admin" || requestor.role === "hr" || (requestor.role === "candidate" && room?.candidateUser?.authUserId === requestor.userId);
   const signedUrl = canViewVideo && displayVideo && displayVideo.status !== "uploading"
@@ -442,6 +456,7 @@ async function buildCandidateVideoState(room, requestor) {
     uploadAllowed,
     reason,
     currentVideo: mapVideoForClient(displayVideo, signedUrl),
+    blockingVideo: mapVideoForClient(resettableUpload),
   };
 }
 
@@ -1011,7 +1026,10 @@ app.post("/api/candidate-videos/:videoId/cancel-upload", async (req, res) => {
       .eq("id", videoId)
       .single();
     if (error) throw error;
-    if (profile.role !== "candidate" || video.candidate_user_id !== user.id) {
+    const room = getRoomByInterviewId(video.interview_id) || getRoomByCandidateAndHr(video.candidate_user_id, user.id);
+    const isOwningCandidate = profile.role === "candidate" && video.candidate_user_id === user.id;
+    const isAssignedHr = profile.role === "hr" && room?.hrUser?.authUserId === user.id;
+    if (!isOwningCandidate && !isAssignedHr) {
       return res.status(403).json({ error: "Candidate upload access required" });
     }
     if (video.status !== "uploading") {
@@ -1031,7 +1049,6 @@ app.post("/api/candidate-videos/:videoId/cancel-upload", async (req, res) => {
       .single();
     if (updateError) throw updateError;
 
-    const room = getRoomByInterviewId(video.interview_id);
     if (room) await emitCandidateVideoState(room.roomId);
     res.json({ video: mapVideoForClient(updated) });
   } catch (err) {

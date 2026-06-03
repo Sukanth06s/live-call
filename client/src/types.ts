@@ -93,4 +93,5 @@ export interface CandidateVideoState {
   uploadAllowed: boolean;
   reason?: string | null;
   currentVideo?: CandidateVideo | null;
+  blockingVideo?: CandidateVideo | null;
 }

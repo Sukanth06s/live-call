@@ -383,11 +383,13 @@ export default function CandidateVideoPanel({
   if (!isCandidate && !isHr && !isSuperAdmin) return null;
 
   const currentVideo = videoState?.currentVideo;
+  const resettableVideo = videoState?.blockingVideo || (currentVideo?.status === "uploading" ? currentVideo : null);
   const showCandidateUpload = isCandidate && videoState?.uploadAllowed && !isUploading;
   const showPendingCandidateStatus = isCandidate && !videoState?.uploadAllowed && videoState?.reason;
+  const showHrEmptyStatus = isHr && videoState && !currentVideo && !resettableVideo;
   const canReview = isHr && currentVideo?.source === "candidate_upload" && currentVideo.status === "pending_review" && currentVideo.signedUrl;
   const canViewAttachedVideo = Boolean(currentVideo?.signedUrl && currentVideo.status !== "uploading" && (isCandidate || isHr || isSuperAdmin));
-  const canResetUpload = isCandidate && currentVideo?.status === "uploading";
+  const canResetUpload = Boolean((isCandidate || isHr) && resettableVideo?.status === "uploading");
   const hasCandidateUploadPreview = Boolean(candidateUploadPreviewUrl && candidateUploadFile);
   const isWorkspaceLayout = layout === "workspace";
 
@@ -579,7 +581,7 @@ export default function CandidateVideoPanel({
           {canResetUpload && (
             <button
               type="button"
-              onClick={() => void cancelUpload(currentVideo.id)}
+              onClick={() => resettableVideo && void cancelUpload(resettableVideo.id)}
               className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-200 transition hover:bg-amber-500/20"
             >
               Reset Upload
@@ -589,6 +591,12 @@ export default function CandidateVideoPanel({
           {showPendingCandidateStatus && (
             <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-xs text-gray-400">
               {videoState?.reason}
+            </div>
+          )}
+
+          {showHrEmptyStatus && (
+            <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-xs text-gray-400">
+              No candidate verification upload is attached yet.
             </div>
           )}
 
