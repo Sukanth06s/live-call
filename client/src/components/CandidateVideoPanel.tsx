@@ -509,9 +509,11 @@ export default function CandidateVideoPanel({
       }`}
     >
       <div
-        className={`mx-auto grid max-w-6xl gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] ${
-          isWorkspaceLayout ? "lg:mx-0 lg:max-w-none lg:grid-cols-1" : ""
-        }`}
+        className={
+          isWorkspaceLayout
+            ? "mx-auto grid max-w-6xl gap-3 lg:mx-0 lg:max-w-none lg:grid-cols-1"
+            : "mx-auto grid max-w-6xl gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]"
+        }
       >
         <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
