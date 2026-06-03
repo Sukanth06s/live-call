@@ -330,6 +330,10 @@ function getRoomByCandidateAndHr(candidateUserId, hrUserId) {
   return null;
 }
 
+function getRoomForCandidateVideoAction(video, hrUserId) {
+  return getRoomByInterviewId(video?.interview_id) || getRoomByCandidateAndHr(video?.candidate_user_id, hrUserId);
+}
+
 function assertRoomParticipant(room, userId, role) {
   if (!room) {
     const err = new Error("Room is no longer active.");
@@ -1032,7 +1036,7 @@ app.post("/api/candidate-videos/:videoId/cancel-upload", async (req, res) => {
       .eq("id", videoId)
       .single();
     if (error) throw error;
-    const room = getRoomByInterviewId(video.interview_id) || getRoomByCandidateAndHr(video.candidate_user_id, user.id);
+    const room = getRoomForCandidateVideoAction(video, user.id);
     const isOwningCandidate = profile.role === "candidate" && video.candidate_user_id === user.id;
     const isAssignedHr = profile.role === "hr" && room?.hrUser?.authUserId === user.id;
     if (!isOwningCandidate && !isAssignedHr) {
@@ -1118,14 +1122,23 @@ app.post("/api/candidate-videos/:videoId/approve", async (req, res) => {
       .eq("id", videoId)
       .single();
     if (error) throw error;
-    const room = getRoomByInterviewId(video.interview_id);
+    const room = getRoomForCandidateVideoAction(video, user.id);
     assertRoomParticipant(room, user.id, "hr");
+    if (video.source !== "candidate_upload") return res.status(409).json({ error: "Only candidate uploads can be approved" });
     if (video.status !== "pending_review") return res.status(409).json({ error: "Only pending videos can be approved" });
 
     const now = new Date().toISOString();
     const { data: updated, error: updateError } = await supabaseAdmin
       .from("candidate_videos")
-      .update({ status: "approved", approved_by_user_id: user.id, approved_at: now, updated_at: now })
+      .update({
+        status: "approved",
+        hr_user_id: user.id,
+        interview_id: room.interviewSessionId || video.interview_id,
+        room_id: room.roomId || video.room_id,
+        approved_by_user_id: user.id,
+        approved_at: now,
+        updated_at: now
+      })
       .eq("id", videoId)
       .select()
       .single();
@@ -1149,8 +1162,9 @@ app.post("/api/candidate-videos/:videoId/dismiss", async (req, res) => {
       .eq("id", videoId)
       .single();
     if (error) throw error;
-    const room = getRoomByInterviewId(video.interview_id);
+    const room = getRoomForCandidateVideoAction(video, user.id);
     assertRoomParticipant(room, user.id, "hr");
+    if (video.source !== "candidate_upload") return res.status(409).json({ error: "Only candidate uploads can be dismissed" });
     if (video.status !== "pending_review") return res.status(409).json({ error: "Only pending videos can be dismissed" });
 
     const removeResult = await supabaseAdmin.storage
