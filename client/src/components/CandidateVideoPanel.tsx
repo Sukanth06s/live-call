@@ -29,6 +29,7 @@ interface CandidateVideoPanelProps {
   currentUserId: string | null;
   remoteUsers: RemoteUserLike[];
   socket?: SocketLike | null;
+  layout?: "stacked" | "workspace";
 }
 
 const maxVideoBytes = 50 * 1024 * 1024;
@@ -99,6 +100,7 @@ export default function CandidateVideoPanel({
   users,
   remoteUsers,
   socket,
+  layout = "stacked",
 }: CandidateVideoPanelProps) {
   const [videoState, setVideoState] = useState<CandidateVideoState | null>(null);
   const [isLoadingState, setIsLoadingState] = useState(false);
@@ -387,6 +389,7 @@ export default function CandidateVideoPanel({
   const canViewAttachedVideo = Boolean(currentVideo?.signedUrl && currentVideo.status !== "uploading" && (isCandidate || isHr || isSuperAdmin));
   const canResetUpload = isCandidate && currentVideo?.status === "uploading";
   const hasCandidateUploadPreview = Boolean(candidateUploadPreviewUrl && candidateUploadFile);
+  const isWorkspaceLayout = layout === "workspace";
 
   const recordingPreviewModal = isMounted && (recordingState === "preview" || recordingState === "saving") && previewUrl
     ? createPortal(
@@ -500,8 +503,16 @@ export default function CandidateVideoPanel({
 
   return (
     <>
-    <section className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/50 px-3 py-3 backdrop-blur-md sm:px-4 lg:px-6">
-      <div className="mx-auto grid max-w-6xl gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
+    <section
+      className={`shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/50 px-3 py-3 backdrop-blur-md sm:px-4 lg:px-6 ${
+        isWorkspaceLayout ? "lg:h-full lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r lg:px-5" : ""
+      }`}
+    >
+      <div
+        className={`mx-auto grid max-w-6xl gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] ${
+          isWorkspaceLayout ? "lg:mx-0 lg:max-w-none lg:grid-cols-1" : ""
+        }`}
+      >
         <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -581,7 +592,13 @@ export default function CandidateVideoPanel({
 
           {canViewAttachedVideo && (
             <div className="mt-4 space-y-3">
-              <video src={currentVideo?.signedUrl || undefined} controls className="max-h-[320px] w-full rounded-lg bg-black" />
+              <video
+                src={currentVideo?.signedUrl || undefined}
+                controls
+                className={`w-full rounded-lg bg-black object-contain ${
+                  isWorkspaceLayout ? "max-h-[320px] lg:max-h-[min(34dvh,260px)]" : "max-h-[320px]"
+                }`}
+              />
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span>{currentVideo?.fileName || "candidate-video"}</span>
                 <span>{formatBytes(currentVideo?.fileSize)}</span>
