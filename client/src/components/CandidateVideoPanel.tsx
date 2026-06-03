@@ -159,11 +159,7 @@ export default function CandidateVideoPanel({
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void refreshVideoState(), 0);
-    const interval = window.setInterval(refreshVideoState, 5000);
-    return () => {
-      window.clearTimeout(timeout);
-      window.clearInterval(interval);
-    };
+    return () => window.clearTimeout(timeout);
   }, [refreshVideoState]);
 
   useEffect(() => {

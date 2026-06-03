@@ -344,6 +344,7 @@ async function getActiveCandidateVideo(candidateUserId) {
     .from("candidate_videos")
     .select("*")
     .eq("candidate_user_id", candidateUserId)
+    .eq("source", "candidate_upload")
     .in("status", ["uploading", "pending_review", "approved"])
     .order("created_at", { ascending: false })
     .limit(1);
@@ -357,6 +358,7 @@ async function getInterviewCandidateVideo(interviewId) {
     .from("candidate_videos")
     .select("*")
     .eq("interview_id", interviewId)
+    .eq("source", "candidate_upload")
     .in("status", ["uploading", "pending_review", "approved"])
     .order("created_at", { ascending: false })
     .limit(1);
