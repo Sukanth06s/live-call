@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
 import { CandidateVideoState, RoomUser } from "@/types";
 
@@ -70,12 +71,18 @@ export default function CandidateVideoPanel({
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const recordingStartedAtRef = useRef<number | null>(null);
   const discardRecordingRef = useRef(false);
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setIsMounted(true), 0);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
   const candidateUser = users.find((user) => user.role === "candidate");
   const candidateRemoteUser = candidateUser?.agoraUid ? remoteUsers.find((remoteUser) => String(remoteUser.uid) === String(candidateUser.agoraUid)) || null : null;
 
@@ -301,7 +308,55 @@ export default function CandidateVideoPanel({
   const canReview = isHr && currentVideo?.source === "candidate_upload" && currentVideo.status === "pending_review" && currentVideo.signedUrl;
   const canViewApproved = (isHr || isSuperAdmin) && currentVideo?.status === "approved" && currentVideo.signedUrl;
 
+  const recordingPreviewModal = isMounted && (recordingState === "preview" || recordingState === "saving") && previewUrl
+    ? createPortal(
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-black/90 p-3 sm:p-4">
+          <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b10] shadow-2xl sm:max-h-[calc(100dvh-2rem)]">
+            <div className="shrink-0 border-b border-white/10 px-4 py-3 sm:px-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-bold text-white">Recording Preview</h2>
+                  <p className="text-xs text-gray-500">Save uploads it as an approved HR recording.</p>
+                </div>
+                <span className="text-xs text-gray-500">{formatTime(recordingSeconds)}</span>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 sm:px-5">
+              {message && (
+                <div className="mb-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                  {message}
+                </div>
+              )}
+              <video src={previewUrl} controls className="mx-auto max-h-[min(56dvh,520px)] w-full rounded-xl bg-black object-contain" />
+            </div>
+            <div className="shrink-0 border-t border-white/10 bg-[#0b0b10] px-4 py-3 sm:px-5">
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={discardPreview}
+                  disabled={recordingState === "saving"}
+                  className="rounded-lg border border-white/10 px-4 py-2 text-xs font-bold text-gray-300 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Delete
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveRecording()}
+                  disabled={recordingState === "saving"}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {recordingState === "saving" ? "Saving..." : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )
+    : null;
+
   return (
+    <>
     <section className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/50 px-3 py-3 backdrop-blur-md sm:px-4 lg:px-6">
       <div className="mx-auto grid max-w-6xl gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
         <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-4">
@@ -421,37 +476,8 @@ export default function CandidateVideoPanel({
           </div>
         )}
       </div>
-
-      {recordingState === "preview" && previewUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-          <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[#0b0b10] p-4 shadow-2xl">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-base font-bold text-white">Recording Preview</h2>
-                <p className="text-xs text-gray-500">Save uploads it as an approved HR recording.</p>
-              </div>
-              <span className="text-xs text-gray-500">{formatTime(recordingSeconds)}</span>
-            </div>
-            <video src={previewUrl} controls className="max-h-[60vh] w-full rounded-xl bg-black" />
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={discardPreview}
-                className="rounded-lg border border-white/10 px-4 py-2 text-xs font-bold text-gray-300 transition hover:bg-white/5"
-              >
-                Delete
-              </button>
-              <button
-                type="button"
-                onClick={() => void saveRecording()}
-                className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-emerald-500"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </section>
+    {recordingPreviewModal}
+    </>
   );
 }

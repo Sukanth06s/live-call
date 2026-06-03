@@ -75,3 +75,8 @@ CREATE TABLE transcript_blocks (
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE interviews TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE candidate_videos TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE transcript_blocks TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
