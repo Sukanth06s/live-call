@@ -50,6 +50,25 @@ function formatBytes(bytes?: number | null) {
   return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
 }
 
+function formatToIST(isoString?: string | null) {
+  if (!isoString) return "";
+  try {
+    const date = new Date(isoString);
+    if (isNaN(date.getTime())) return isoString;
+    return date.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    }) + " IST";
+  } catch (err) {
+    return isoString || "";
+  }
+}
+
 function getSignedUploadUrl(upload: { path: string; token: string; signedUrl?: string }) {
   if (upload.signedUrl) return upload.signedUrl;
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -204,9 +223,9 @@ export default function CandidateVideoPanel({
     const candidateStillPresent = users.some((user) => user.role === "candidate");
     const hrStillPresent = users.some((user) => user.role === "hr");
     if (recordingState === "recording" && (!candidateStillPresent || !hrStillPresent)) {
-      stopRecording(true);
+      stopRecording(false);
       window.setTimeout(() => {
-        setMessage("Candidate/HR disconnected from the call. Video recording stopped and discarded.");
+        setMessage("Candidate/HR disconnected from the call. Video recording stopped and finalized as a preview.");
       }, 0);
     }
   }, [recordingState, stopRecording, users]);
@@ -370,7 +389,7 @@ export default function CandidateVideoPanel({
       await apiFetch(`/api/candidate-videos/${init.video.id}/complete-upload`, { method: "POST" });
       discardPreview();
       setRecordingState("saved");
-      setMessage("Candidate recording saved and approved.");
+      setMessage("Candidate recording saved. Pending HR review.");
       await refreshVideoState();
     } catch (err) {
       setRecordingState("preview");
@@ -379,18 +398,19 @@ export default function CandidateVideoPanel({
       setUploadPhase(null);
     }
   };
-
+ 
   if (!isCandidate && !isHr && !isSuperAdmin) return null;
-
+ 
   const currentVideo = videoState?.currentVideo;
-  const currentVideoCanReset = currentVideo?.source === "candidate_upload" && (currentVideo.status === "uploading" || currentVideo.status === "pending_review");
+  const isVerified = currentVideo?.status === "anr";
+  const currentVideoCanReset = currentVideo?.source === "candidate_upload" && (currentVideo.status === "uploading" || currentVideo.status === "enr");
   const resettableVideo = videoState?.blockingVideo || (currentVideoCanReset ? currentVideo : null);
-  const showCandidateUpload = isCandidate && videoState?.uploadAllowed && !isUploading;
-  const showPendingCandidateStatus = isCandidate && !videoState?.uploadAllowed && videoState?.reason;
-  const showHrEmptyStatus = isHr && videoState && !currentVideo && !resettableVideo;
-  const canReview = isHr && currentVideo?.source === "candidate_upload" && currentVideo.status === "pending_review" && currentVideo.signedUrl;
+  const showCandidateUpload = isCandidate && videoState?.uploadAllowed && !isUploading && !isVerified;
+  const showPendingCandidateStatus = isCandidate && !videoState?.uploadAllowed && videoState?.reason && !isVerified;
+  const showHrEmptyStatus = isHr && videoState && !currentVideo && !resettableVideo && !isVerified;
+  const canReview = isHr && currentVideo && currentVideo.status === "enr" && currentVideo.signedUrl;
   const canViewAttachedVideo = Boolean(currentVideo?.signedUrl && currentVideo.status !== "uploading" && (isCandidate || isHr || isSuperAdmin));
-  const canResetUpload = Boolean((isCandidate || isHr) && resettableVideo && ["uploading", "pending_review"].includes(resettableVideo.status));
+  const canResetUpload = Boolean((isCandidate || isHr) && resettableVideo && ["uploading", "enr"].includes(resettableVideo.status));
   const hasCandidateUploadPreview = Boolean(candidateUploadPreviewUrl && candidateUploadFile);
   const isWorkspaceLayout = layout === "workspace";
 
@@ -523,11 +543,15 @@ export default function CandidateVideoPanel({
             <div>
               <h2 className="text-sm font-bold text-white">Candidate Verification Video</h2>
               <p className="mt-0.5 text-xs text-gray-500">
-                {isLoadingState ? "Checking video state..." : videoState?.interviewId ? "Attached to active interview" : "Available once HR joins"}
+                {isLoadingState ? "Checking video state..." : isVerified ? "Verification complete" : "Verification in progress"}
               </p>
             </div>
             {currentVideo && (
-              <span className="w-fit rounded-md border border-indigo-500/20 bg-indigo-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-indigo-300">
+              <span className={`w-fit rounded-md border px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${
+                currentVideo.status === "anr"
+                  ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+                  : "border-indigo-500/20 bg-indigo-500/10 text-indigo-300"
+              }`}>
                 {currentVideo.status.replace("_", " ")}
               </span>
             )}
@@ -536,6 +560,27 @@ export default function CandidateVideoPanel({
           {message && (
             <div className="mt-3 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2 text-xs text-gray-300">
               {message}
+            </div>
+          )}
+
+          {isVerified && videoState?.verification && (
+            <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-emerald-200 animate-fade-in">
+              <div className="flex items-center gap-3">
+                <div className="rounded-full bg-emerald-500/20 p-2 text-emerald-400">
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-sm">Approved & Verified</h3>
+                  <p className="text-xs mt-0.5 text-emerald-300/85">
+                    Verified By: <span className="font-semibold text-white">{videoState.verification.approvedByHrName || "HR"}</span>
+                  </p>
+                  <p className="text-[10px] mt-0.5 text-emerald-400/60">
+                    Verified On: {formatToIST(videoState.verification.approvedAt)}
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
@@ -611,7 +656,7 @@ export default function CandidateVideoPanel({
                 }`}
               />
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                <span>{currentVideo?.fileName || "candidate-video"}</span>
+                <span>{currentVideo?.fileName || (currentVideo?.source === "hr_recording" ? "hr-candidate-recording" : "candidate-verification-video")}</span>
                 <span>{formatBytes(currentVideo?.fileSize)}</span>
               </div>
               {canReview && (
@@ -636,7 +681,7 @@ export default function CandidateVideoPanel({
           )}
         </div>
 
-        {isHr && (
+        {isHr && !isVerified && (
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-4">
             <div className="flex items-start justify-between gap-3">
               <div>

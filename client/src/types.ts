@@ -5,7 +5,7 @@ export type RoomLanguage = "english" | "tamil" | "hindi";
 
 export type InterviewState = "waiting" | "active" | "transcribing" | "paused" | "ended";
 export type CandidateVideoSource = "candidate_upload" | "hr_recording";
-export type CandidateVideoStatus = "uploading" | "pending_review" | "approved" | "discarded";
+export type CandidateVideoStatus = "uploading" | "enr" | "anr" | "archived";
 
 export interface RoomUser {
   id: string;          // Socket ID
@@ -94,4 +94,8 @@ export interface CandidateVideoState {
   reason?: string | null;
   currentVideo?: CandidateVideo | null;
   blockingVideo?: CandidateVideo | null;
+  verification?: {
+    approvedByHrName: string;
+    approvedAt: string;
+  } | null;
 }

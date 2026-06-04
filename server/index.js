@@ -200,10 +200,11 @@ function getVideoExtension(mimeType, fileName = "") {
   return "webm";
 }
 
-function getVideoStoragePath({ candidateUserId, interviewId, source, videoId, mimeType, fileName }) {
-  const folder = source === "hr_recording" ? "hr_recording" : "candidate_upload";
+function getVideoStoragePath({ candidateUserId, source, videoId, mimeType, fileName }) {
+  const folder = source === "hr_recording" ? "hr-recording" : "candidate-upload";
+  const prefix = source === "hr_recording" ? "R_" : "U_";
   const extension = getVideoExtension(mimeType, fileName);
-  return `${candidateUserId}/${interviewId}/${folder}/${videoId}.${extension}`;
+  return `${candidateUserId}/${folder}/${prefix}${videoId}.${extension}`;
 }
 
 function getEndedReason(reason) {
@@ -354,34 +355,6 @@ function assertRoomParticipant(room, userId, role) {
   }
 }
 
-async function getActiveCandidateVideo(candidateUserId) {
-  const { data, error } = await supabaseAdmin
-    .from("candidate_videos")
-    .select("*")
-    .eq("candidate_user_id", candidateUserId)
-    .eq("source", "candidate_upload")
-    .in("status", ["uploading", "pending_review", "approved"])
-    .order("created_at", { ascending: false })
-    .limit(1);
-
-  if (error) throw error;
-  return data?.[0] || null;
-}
-
-async function getInterviewCandidateVideo(interviewId) {
-  const { data, error } = await supabaseAdmin
-    .from("candidate_videos")
-    .select("*")
-    .eq("interview_id", interviewId)
-    .eq("source", "candidate_upload")
-    .in("status", ["uploading", "pending_review", "approved"])
-    .order("created_at", { ascending: false })
-    .limit(1);
-
-  if (error) throw error;
-  return data?.[0] || null;
-}
-
 async function createSignedVideoUrl(video) {
   if (!video?.storage_path) return null;
   const { data, error } = await supabaseAdmin.storage
@@ -406,8 +379,9 @@ function mapVideoForClient(video, signedUrl = null) {
     mimeType: video.mime_type,
     fileSize: video.file_size,
     durationSeconds: video.duration_seconds,
-    approvedByUserId: video.approved_by_user_id,
+    approvedByUserId: video.approved_by_hr_user_id || video.hr_user_id,
     approvedAt: video.approved_at,
+    dismissedAt: video.dismissed_at,
     createdAt: video.created_at,
     updatedAt: video.updated_at,
     signedUrl,
@@ -416,16 +390,109 @@ function mapVideoForClient(video, signedUrl = null) {
 
 async function buildCandidateVideoState(room, requestor) {
   const candidateUserId = room?.candidateUser?.authUserId || room?.lastCandidateUser?.authUserId;
-  const currentVideo = room?.interviewSessionId ? await getInterviewCandidateVideo(room.interviewSessionId) : null;
-  const activeCandidateVideo = candidateUserId ? await getActiveCandidateVideo(candidateUserId) : null;
-  const blockingVideo = activeCandidateVideo || currentVideo;
-  const isResettableCandidateUpload = blockingVideo?.source === "candidate_upload" && ["uploading", "pending_review"].includes(blockingVideo.status);
-  const displayVideo = currentVideo || (isResettableCandidateUpload ? blockingVideo : null);
-  const resettableUpload = isResettableCandidateUpload
-    ? blockingVideo
-    : null;
+  if (!candidateUserId) {
+    return {
+      interviewId: room?.interviewSessionId || null,
+      uploadAllowed: false,
+      reason: "No candidate found in the room.",
+      currentVideo: null,
+      blockingVideo: null,
+    };
+  }
 
-  const canViewVideo = requestor.role === "super_admin" || requestor.role === "hr" || (requestor.role === "candidate" && room?.candidateUser?.authUserId === requestor.userId);
+  // 1. Check candidate_verification for the candidate
+  const { data: verification, error: verError } = await supabaseAdmin
+    .from("candidate_verification")
+    .select("*")
+    .eq("candidate_user_id", candidateUserId)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (verError) throw verError;
+
+  let displayVideo = null;
+  let uploadAllowed = true;
+  let reason = null;
+  let verificationInfo = null;
+
+  if (verification) {
+    // Finalized verification exists
+    const { data: video, error: videoError } = await supabaseAdmin
+      .from("candidate_videos")
+      .select("*")
+      .eq("id", verification.video_id)
+      .single();
+
+    if (videoError) throw videoError;
+    displayVideo = video;
+    uploadAllowed = false;
+    reason = "Candidate verification is already approved.";
+    verificationInfo = {
+      approvedByHrName: verification.approved_by_hr_name_snapshot,
+      approvedAt: verification.approved_at,
+    };
+  } else {
+    // 2. Fetch latest candidate_videos record where status = 'enr' order by created_at desc limit 1
+    const { data: enrVideos, error: enrError } = await supabaseAdmin
+      .from("candidate_videos")
+      .select("*")
+      .eq("candidate_user_id", candidateUserId)
+      .eq("status", "enr")
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (enrError) throw enrError;
+
+    const latestEnrVideo = enrVideos?.[0] || null;
+
+    if (latestEnrVideo) {
+      displayVideo = latestEnrVideo;
+      uploadAllowed = false;
+      reason = "Your uploaded video is pending HR review.";
+    } else {
+      // 3. Check for any record in 'uploading' state for the candidate
+      const { data: uploadingVideos, error: uploadingError } = await supabaseAdmin
+        .from("candidate_videos")
+        .select("*")
+        .eq("candidate_user_id", candidateUserId)
+        .eq("status", "uploading")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (uploadingError) throw uploadingError;
+      const latestUploadingVideo = uploadingVideos?.[0] || null;
+
+      if (latestUploadingVideo) {
+        displayVideo = latestUploadingVideo;
+        uploadAllowed = false;
+        reason = "A video upload is already in progress.";
+      } else {
+        uploadAllowed = true;
+        reason = null;
+      }
+    }
+  }
+
+  // 4. Enforce room and role restrictions if upload is otherwise allowed
+  if (uploadAllowed) {
+    if (!room?.interviewSessionId) {
+      uploadAllowed = false;
+      reason = "Upload is available after HR joins the call.";
+    } else if (!room.hrUser) {
+      uploadAllowed = false;
+      reason = "Upload is available only while HR is present.";
+    } else if (requestor.role !== "candidate") {
+      uploadAllowed = false;
+      reason = "Only the candidate can upload verification videos.";
+    } else if (room.candidateUser?.authUserId !== requestor.userId) {
+      uploadAllowed = false;
+      reason = "This interview belongs to another candidate.";
+    }
+  }
+
+  const canViewVideo = requestor.role === "super_admin" || requestor.role === "hr" ||
+    (requestor.role === "candidate" && candidateUserId === requestor.userId);
+
   let signedUrl = null;
   if (canViewVideo && displayVideo && displayVideo.status !== "uploading") {
     try {
@@ -435,38 +502,16 @@ async function buildCandidateVideoState(room, requestor) {
     }
   }
 
-  let uploadAllowed = true;
-  let reason = null;
-
-  if (!room?.interviewSessionId) {
-    uploadAllowed = false;
-    reason = "Upload is available after HR joins the call.";
-  } else if (!room.hrUser) {
-    uploadAllowed = false;
-    reason = "Upload is available only while HR is present.";
-  } else if (requestor.role !== "candidate") {
-    uploadAllowed = false;
-    reason = "Only the candidate can upload verification videos.";
-  } else if (room.candidateUser?.authUserId !== requestor.userId) {
-    uploadAllowed = false;
-    reason = "This interview belongs to another candidate.";
-  } else if (blockingVideo?.status === "approved") {
-    uploadAllowed = false;
-    reason = "Candidate verification is already approved.";
-  } else if (blockingVideo?.status === "pending_review") {
-    uploadAllowed = false;
-    reason = "Your uploaded video is pending HR review.";
-  } else if (blockingVideo?.status === "uploading") {
-    uploadAllowed = false;
-    reason = "A video upload is already in progress.";
-  }
+  const isResettable = displayVideo && ["uploading", "enr"].includes(displayVideo.status);
+  const resettableUpload = isResettable ? displayVideo : null;
 
   return {
     interviewId: room?.interviewSessionId || null,
     uploadAllowed,
     reason,
     currentVideo: mapVideoForClient(displayVideo, signedUrl),
-    blockingVideo: mapVideoForClient(resettableUpload),
+    blockingVideo: resettableUpload ? mapVideoForClient(resettableUpload) : null,
+    verification: verificationInfo,
   };
 }
 
@@ -914,13 +959,26 @@ app.post("/api/candidate-videos/init-upload", async (req, res) => {
 
     const room = getRoom(roomId);
     assertRoomParticipant(room, user.id, "candidate");
+
+    // Protect against existing approved verification at the database API level
+    const { data: verification, error: verError } = await supabaseAdmin
+      .from("candidate_verification")
+      .select("candidate_user_id")
+      .eq("candidate_user_id", user.id)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (verError) throw verError;
+    if (verification) {
+      return res.status(409).json({ error: "Candidate verification is already approved." });
+    }
+
     const state = await buildCandidateVideoState(room, { userId: user.id, role: profile.role });
     if (!state.uploadAllowed) return res.status(409).json({ error: state.reason || "Upload is not allowed right now" });
 
     const videoId = crypto.randomUUID();
     const storagePath = getVideoStoragePath({
       candidateUserId: user.id,
-      interviewId: room.interviewSessionId,
       source: "candidate_upload",
       videoId,
       mimeType,
@@ -972,20 +1030,22 @@ app.post("/api/candidate-videos/hr-recording/init-upload", async (req, res) => {
       return res.status(409).json({ error: "Recording can be saved only during an active interview" });
     }
 
-    const { data: existing, error: existingError } = await supabaseAdmin
-      .from("candidate_videos")
-      .select("id, status")
-      .eq("interview_id", room.interviewSessionId)
-      .eq("source", "hr_recording")
-      .in("status", ["uploading", "pending_review", "approved"])
-      .limit(1);
-    if (existingError) throw existingError;
-    if (existing?.length) return res.status(409).json({ error: "A recording has already been saved or is being saved for this interview" });
+    // Protect against existing approved verification at database API level
+    const { data: verification, error: verError } = await supabaseAdmin
+      .from("candidate_verification")
+      .select("candidate_user_id")
+      .eq("candidate_user_id", room.candidateUser.authUserId)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (verError) throw verError;
+    if (verification) {
+      return res.status(409).json({ error: "Candidate verification is already approved." });
+    }
 
     const videoId = crypto.randomUUID();
     const storagePath = getVideoStoragePath({
       candidateUserId: room.candidateUser.authUserId,
-      interviewId: room.interviewSessionId,
       source: "hr_recording",
       videoId,
       mimeType,
@@ -1042,18 +1102,14 @@ app.post("/api/candidate-videos/:videoId/cancel-upload", async (req, res) => {
     if (!isOwningCandidate && !isAssignedHr) {
       return res.status(403).json({ error: "Candidate upload access required" });
     }
-    if (video.source !== "candidate_upload" || !["uploading", "pending_review"].includes(video.status)) {
-      return res.status(409).json({ error: "Only in-progress or pending candidate uploads can be reset" });
+    if (video.source !== "candidate_upload" || !["uploading", "enr"].includes(video.status)) {
+      return res.status(409).json({ error: "Only in-progress or active candidate uploads can be reset" });
     }
-
-    await supabaseAdmin.storage
-      .from(video.storage_bucket || candidateVideoBucket)
-      .remove([video.storage_path]);
 
     const now = new Date().toISOString();
     const { data: updated, error: updateError } = await supabaseAdmin
       .from("candidate_videos")
-      .update({ status: "discarded", discarded_at: now, updated_at: now })
+      .update({ status: "archived", dismissed_at: now, updated_at: now })
       .eq("id", videoId)
       .select()
       .single();
@@ -1065,6 +1121,7 @@ app.post("/api/candidate-videos/:videoId/cancel-upload", async (req, res) => {
     sendApiError(res, err, "Could not cancel upload");
   }
 });
+
 app.post("/api/candidate-videos/:videoId/complete-upload", async (req, res) => {
   try {
     const { user, profile } = await getAuthenticatedRequestContext(req);
@@ -1077,7 +1134,7 @@ app.post("/api/candidate-videos/:videoId/complete-upload", async (req, res) => {
     if (error) throw error;
     if (video.status !== "uploading") return res.status(409).json({ error: "Upload has already been completed" });
 
-    const room = getRoomByInterviewId(video.interview_id);
+    const room = getRoomForCandidateVideoAction(video, user.id);
     if (video.source === "candidate_upload") {
       if (profile.role !== "candidate" || video.candidate_user_id !== user.id) return res.status(403).json({ error: "Candidate upload access required" });
       assertRoomParticipant(room, user.id, "candidate");
@@ -1086,19 +1143,19 @@ app.post("/api/candidate-videos/:videoId/complete-upload", async (req, res) => {
       assertRoomParticipant(room, user.id, "hr");
     }
 
-    const nextStatus = video.source === "hr_recording" ? "approved" : "pending_review";
-    const updatePayload = {
-      status: nextStatus,
-      updated_at: new Date().toISOString(),
-    };
-    if (nextStatus === "approved") {
-      updatePayload.approved_by_user_id = user.id;
-      updatePayload.approved_at = new Date().toISOString();
-    }
+    const now = new Date().toISOString();
+
+    // Enforce global constraint: archive any existing 'enr' videos for this candidate
+    const { error: archiveError } = await supabaseAdmin
+      .from("candidate_videos")
+      .update({ status: "archived", updated_at: now })
+      .eq("candidate_user_id", video.candidate_user_id)
+      .eq("status", "enr");
+    if (archiveError) throw archiveError;
 
     const { data: updated, error: updateError } = await supabaseAdmin
       .from("candidate_videos")
-      .update(updatePayload)
+      .update({ status: "enr", updated_at: now })
       .eq("id", videoId)
       .select()
       .single();
@@ -1124,28 +1181,27 @@ app.post("/api/candidate-videos/:videoId/approve", async (req, res) => {
     if (error) throw error;
     const room = getRoomForCandidateVideoAction(video, user.id);
     assertRoomParticipant(room, user.id, "hr");
-    if (video.source !== "candidate_upload") return res.status(409).json({ error: "Only candidate uploads can be approved" });
-    if (video.status !== "pending_review") return res.status(409).json({ error: "Only pending videos can be approved" });
+    if (video.status !== "enr") return res.status(409).json({ error: "Only pending videos can be approved" });
 
-    const now = new Date().toISOString();
-    const { data: updated, error: updateError } = await supabaseAdmin
+    const hrDisplayName = await getDisplayNameForUserId(user.id, "HR");
+
+    // Execute transactional approval through PostgreSQL RPC function
+    const { error: rpcError } = await supabaseAdmin.rpc("approve_candidate_video", {
+      p_video_id: videoId,
+      p_hr_user_id: user.id,
+      p_hr_name_snapshot: hrDisplayName,
+    });
+    if (rpcError) throw rpcError;
+
+    const { data: updatedVideo, error: videoFetchError } = await supabaseAdmin
       .from("candidate_videos")
-      .update({
-        status: "approved",
-        hr_user_id: user.id,
-        interview_id: room.interviewSessionId || video.interview_id,
-        room_id: room.roomId || video.room_id,
-        approved_by_user_id: user.id,
-        approved_at: now,
-        updated_at: now
-      })
+      .select("*")
       .eq("id", videoId)
-      .select()
       .single();
-    if (updateError) throw updateError;
+    if (videoFetchError) throw videoFetchError;
 
     if (room) await emitCandidateVideoState(room.roomId);
-    res.json({ video: mapVideoForClient(updated) });
+    res.json({ video: mapVideoForClient(updatedVideo) });
   } catch (err) {
     sendApiError(res, err, "Could not approve video");
   }
@@ -1164,18 +1220,12 @@ app.post("/api/candidate-videos/:videoId/dismiss", async (req, res) => {
     if (error) throw error;
     const room = getRoomForCandidateVideoAction(video, user.id);
     assertRoomParticipant(room, user.id, "hr");
-    if (video.source !== "candidate_upload") return res.status(409).json({ error: "Only candidate uploads can be dismissed" });
-    if (video.status !== "pending_review") return res.status(409).json({ error: "Only pending videos can be dismissed" });
-
-    const removeResult = await supabaseAdmin.storage
-      .from(video.storage_bucket || candidateVideoBucket)
-      .remove([video.storage_path]);
-    if (removeResult.error) throw removeResult.error;
+    if (video.status !== "enr") return res.status(409).json({ error: "Only pending videos can be dismissed" });
 
     const now = new Date().toISOString();
     const { data: updated, error: updateError } = await supabaseAdmin
       .from("candidate_videos")
-      .update({ status: "discarded", discarded_at: now, updated_at: now })
+      .update({ status: "archived", dismissed_at: now, updated_at: now })
       .eq("id", videoId)
       .select()
       .single();
@@ -1185,6 +1235,35 @@ app.post("/api/candidate-videos/:videoId/dismiss", async (req, res) => {
     res.json({ video: mapVideoForClient(updated) });
   } catch (err) {
     sendApiError(res, err, "Could not dismiss video");
+  }
+});
+
+app.post("/api/admin/candidate/:candidateId/reset-verification", async (req, res) => {
+  try {
+    const { user, profile } = await getAuthenticatedRequestContext(req);
+    if (profile.role !== "super_admin") return res.status(403).json({ error: "Only administrators can reset verification" });
+    const { candidateId } = req.params;
+
+    // Execute transactional reset through PostgreSQL RPC function
+    const { error: rpcError } = await supabaseAdmin.rpc("reset_candidate_verification", {
+      p_candidate_user_id: candidateId,
+    });
+    if (rpcError) throw rpcError;
+
+    // Scan for any active rooms containing the candidate and broadcast updates
+    for (const room of getAllRooms()) {
+      const fullRoom = getRoom(room.roomId);
+      if (
+        fullRoom?.candidateUser?.authUserId === candidateId ||
+        fullRoom?.lastCandidateUser?.authUserId === candidateId
+      ) {
+        await emitCandidateVideoState(fullRoom.roomId);
+      }
+    }
+
+    res.json({ status: "ok", message: "Verification state reset successfully" });
+  } catch (err) {
+    sendApiError(res, err, "Could not reset candidate verification");
   }
 });
 io.on("connection", (socket) => {
