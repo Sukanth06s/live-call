@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback } from "react";
-import { motion } from "framer-motion";
+import { useCallback, useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import UserList from "./UserList";
 import TranscriptPanel from "./TranscriptPanel";
 import MuteButton from "./MuteButton";
@@ -43,6 +43,12 @@ interface RoomPageProps {
   isTranscribing: boolean;
   isTranscriptionChanging?: boolean;
   transcriptionCountdown?: number | null;
+  hrRecovery?: {
+    isRecovering: boolean;
+    message: string;
+    remainingMs: number;
+    deadline: number;
+  } | null;
   onToggleMute: () => void;
   onToggleVideo: () => void;
   onLeaveRoom: () => void;
@@ -83,6 +89,7 @@ export default function RoomPage({
   isTranscribing,
   isTranscriptionChanging = false,
   transcriptionCountdown = null,
+  hrRecovery = null,
   onToggleMute,
   onToggleVideo,
   onLeaveRoom,
@@ -94,6 +101,7 @@ export default function RoomPage({
   onSaveFinalTranscript,
   transcriptSaveStatus,
 }: RoomPageProps) {
+  const [showEndConfirm, setShowEndConfirm] = useState(false);
   const copyRoomId = useCallback(() => {
     void navigator.clipboard.writeText(roomId);
   }, [roomId]);
@@ -102,6 +110,29 @@ export default function RoomPage({
   const resolvedRole = userRole || currentUser?.role || "candidate";
   const isHr = resolvedRole === "hr";
   const isSuperAdmin = resolvedRole === "super_admin";
+
+  const candidateInRoom = users.some((u) => u.role === "candidate");
+
+  // beforeunload guard — warn HR if they try to close the tab while a candidate is present
+  useEffect(() => {
+    if (!isHr || !candidateInRoom) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "A candidate is still in this interview. Leaving will interrupt their session.";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isHr, candidateInRoom]);
+
+  // HR leave/end handler — shows confirm dialog when candidate is present
+  const handleHrLeave = useCallback(() => {
+    if (candidateInRoom) {
+      setShowEndConfirm(true);
+    } else {
+      onLeaveRoom();
+    }
+  }, [candidateInRoom, onLeaveRoom]);
   const visibleRemoteRoomUsers = users.filter((u) => {
     if (u.id === currentUserId) return false;
     return u.role === "candidate" || u.role === "hr";
@@ -279,11 +310,15 @@ export default function RoomPage({
 
   const renderLeaveButton = (compact = false) => (
     <motion.button
-      onClick={onLeaveRoom}
+      onClick={isHr ? handleHrLeave : onLeaveRoom}
       whileTap={{ scale: 0.97 }}
-      className={`w-full rounded-xl border border-white/[0.06] bg-white/[0.04] font-medium text-gray-400 transition-all duration-300 hover:border-red-500/20 hover:bg-red-500/10 hover:text-red-400 ${compact ? "px-3 py-3 text-xs" : "py-3 text-sm"}`}
+      className={`w-full rounded-xl border font-medium transition-all duration-300 ${
+        isHr && candidateInRoom
+          ? "border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300"
+          : "border-white/[0.06] bg-white/[0.04] text-gray-400 hover:border-red-500/20 hover:bg-red-500/10 hover:text-red-400"
+      } ${compact ? "px-3 py-3 text-xs" : "py-3 text-sm"}`}
     >
-      Leave Room
+      {isHr && candidateInRoom ? "End Interview" : "Leave Room"}
     </motion.button>
   );
 
@@ -326,6 +361,84 @@ export default function RoomPage({
     <div className="relative flex h-[100dvh] min-h-[100dvh] overflow-hidden bg-[#07070a] text-white lg:flex-row">
       <div className="pointer-events-none fixed left-1/4 top-0 h-[420px] w-[420px] rounded-full bg-blue-600/5 blur-[140px] sm:h-[500px] sm:w-[500px]" />
       <div className="pointer-events-none fixed bottom-0 right-1/4 h-[420px] w-[420px] rounded-full bg-purple-600/5 blur-[140px] sm:h-[500px] sm:w-[500px]" />
+
+      {/* ── HR Recovery Banner ── */}
+      <AnimatePresence>
+        {hrRecovery?.isRecovering && (
+          <motion.div
+            key="hr-recovery-banner"
+            initial={{ y: -80, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -80, opacity: 0 }}
+            transition={{ type: "spring", stiffness: 400, damping: 32 }}
+            className="fixed inset-x-0 top-0 z-50 flex items-center justify-between gap-4 bg-amber-500/95 px-4 py-3 shadow-2xl shadow-amber-900/40 backdrop-blur-sm"
+          >
+            <div className="flex items-center gap-3 text-sm font-semibold text-amber-950">
+              <span className="relative flex h-2.5 w-2.5 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-800 opacity-60" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-900" />
+              </span>
+              <span>{hrRecovery.message}</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="font-mono text-lg font-bold text-amber-950">
+                {Math.ceil(hrRecovery.remainingMs / 1000)}s
+              </span>
+              <span className="text-xs text-amber-800">remaining</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── End Interview Confirm Dialog (HR only) ── */}
+      <AnimatePresence>
+        {showEndConfirm && (
+          <motion.div
+            key="end-confirm-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.92, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.92, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 380, damping: 28 }}
+              className="mx-4 w-full max-w-sm rounded-2xl border border-white/[0.08] bg-[#13131a] p-6 shadow-2xl"
+            >
+              <div className="mb-1 flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-500/15">
+                  <svg className="h-5 w-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <h2 className="text-base font-bold text-white">End Interview?</h2>
+              </div>
+              <p className="mb-5 mt-2 text-sm leading-relaxed text-gray-400">
+                The candidate is still in the room. Ending the interview will close the session and save the transcript.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowEndConfirm(false)}
+                  className="flex-1 rounded-xl border border-white/[0.08] bg-white/[0.04] py-2.5 text-sm font-medium text-gray-300 transition-colors hover:bg-white/[0.08]"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setShowEndConfirm(false);
+                    onLeaveRoom();
+                  }}
+                  className="flex-1 rounded-xl bg-red-500/90 py-2.5 text-sm font-semibold text-white shadow-lg shadow-red-500/20 transition-all hover:bg-red-500"
+                >
+                  End Interview
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <motion.aside
         initial={{ x: -300, opacity: 0 }}

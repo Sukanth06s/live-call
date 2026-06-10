@@ -14,14 +14,14 @@ function createRoom(roomId, language = "english") {
       roomId: roomId,
       language: normalizeLanguage(language),
       interviewSessionId: null, // Set when HR starts the interview
-      state: "waiting", // "waiting" | "active" | "transcribing" | "paused" | "ended"
-      
+      state: "waiting", // "waiting" | "active" | "transcribing" | "paused" | "hr_recovering" | "ending" | "ended"
+
       candidateUser: null,
       hrUser: null,
       lastCandidateUser: null,
       lastHrUser: null,
       hiddenObservers: new Map(), // socketId -> RoomUser
-      
+
       activeTranscriptionSession: {
         isActive: false,
         startedBy: null,
@@ -29,10 +29,20 @@ function createRoom(roomId, language = "english") {
         startedAt: null
       },
       roomStateVersion: 0,
-      
+
       blocks: [],                 // Array of TranscriptBlocks
       activeSpeakers: new Map(),  // userName -> { blockId, committedSegments, liveSegment }
       createdAt: Date.now(),
+
+      // HR recovery metadata
+      hrRecovery: {
+        isRecovering: false,
+        disconnectedAt: null,       // timestamp ms
+        deadline: null,             // timestamp ms (disconnectedAt + 15000)
+        disconnectedHrAuthUserId: null,
+        disconnectedHrName: null,
+      },
+      priority: "normal",           // "normal" | "critical"
     });
   }
   return rooms.get(roomId);
@@ -46,7 +56,7 @@ function joinRoom(roomId, userId, userName, authUserId, role, agoraUid = null) {
       : role === "hr"
       ? room.hrUser
       : Array.from(room.hiddenObservers.values()).find((observer) => observer.authUserId === authUserId);
-  
+
   const user = {
     id: userId,
     agoraUid,
@@ -73,10 +83,14 @@ function joinRoom(roomId, userId, userName, authUserId, role, agoraUid = null) {
     }
     room.hiddenObservers.set(userId, user);
   }
-  
+
   return room;
 }
 
+// NOTE: Auto-delete on empty has been intentionally removed.
+// Callers are responsible for calling deleteRoom() when appropriate.
+// This is required so that hr_recovering rooms survive the grace period
+// even when hrUser is null.
 function leaveRoom(roomId, userId) {
   const room = rooms.get(roomId);
   if (room) {
@@ -89,14 +103,8 @@ function leaveRoom(roomId, userId) {
       room.hrUser = null;
     }
     room.hiddenObservers.delete(userId);
-    
-    // Clean up empty rooms
-    if (!room.candidateUser && !room.hrUser && room.hiddenObservers.size === 0) {
-      rooms.delete(roomId);
-      return null;
-    }
   }
-  return room;
+  return room || null;
 }
 
 function getRoom(roomId) {
@@ -105,6 +113,7 @@ function getRoom(roomId) {
 
 function getAllRooms() {
   const activeRooms = [];
+  const now = Date.now();
   for (const [roomId, room] of rooms) {
     activeRooms.push({
       roomId: room.roomId,
@@ -114,7 +123,15 @@ function getAllRooms() {
       isFull: Boolean(room.candidateUser && room.hrUser),
       candidateName: room.candidateUser?.name || room.lastCandidateUser?.name || null,
       hrName: room.hrUser?.name || room.lastHrUser?.name || null,
-      createdAt: room.createdAt
+      createdAt: room.createdAt,
+      priority: room.priority || "normal",
+      hrRecovery: room.hrRecovery?.isRecovering
+        ? {
+            isRecovering: true,
+            disconnectedHrName: room.hrRecovery.disconnectedHrName,
+            remainingMs: Math.max(0, (room.hrRecovery.deadline || 0) - now),
+          }
+        : null,
     });
   }
   return activeRooms;
@@ -122,21 +139,35 @@ function getAllRooms() {
 
 function getRoomsForRole(role, language = null) {
   const normalizedLanguage = language ? normalizeLanguage(language) : null;
-  return getAllRooms().filter((room) => {
-    if (role === "hr") {
-      return room.language === normalizedLanguage && Boolean(room.candidateName);
-    }
-    if (role === "super_admin") {
-      return room.isFull;
-    }
-    return false;
-  });
+  return getAllRooms()
+    .filter((room) => {
+      if (role === "hr") {
+        const matchesLanguage = room.language === normalizedLanguage;
+        // Show waiting rooms (candidate waiting, no HR) OR recovering rooms (HR lost connection)
+        const isWaiting = Boolean(room.candidateName) && !room.hrName;
+        const isRecovering = room.state === "hr_recovering" && Boolean(room.candidateName);
+        return matchesLanguage && (isWaiting || isRecovering);
+      }
+      if (role === "super_admin") {
+        // Full rooms OR rooms in HR recovery mode
+        return room.isFull || room.state === "hr_recovering";
+      }
+      return false;
+    })
+    .sort((a, b) => {
+      // Critical (hr_recovering) rooms surface first
+      if (a.priority === "critical" && b.priority !== "critical") return -1;
+      if (b.priority === "critical" && a.priority !== "critical") return 1;
+      return a.createdAt - b.createdAt;
+    });
 }
 
 // Return the projected room state depending on who is asking
 function getProjectedRoomState(roomId, requestorRole) {
   const room = rooms.get(roomId);
   if (!room) return null;
+
+  const now = Date.now();
 
   // Candidate and HR only see candidate and HR
   const visibleUsers = [];
@@ -157,6 +188,14 @@ function getProjectedRoomState(roomId, requestorRole) {
     blocks: room.blocks,
     activeTranscriptionSession: room.activeTranscriptionSession,
     roomStateVersion: room.roomStateVersion,
+    priority: room.priority || "normal",
+    hrRecovery: room.hrRecovery?.isRecovering
+      ? {
+          isRecovering: true,
+          disconnectedHrName: room.hrRecovery.disconnectedHrName,
+          remainingMs: Math.max(0, (room.hrRecovery.deadline || 0) - now),
+        }
+      : null,
   };
 }
 
@@ -277,8 +316,8 @@ function finalizeAllActiveSpeakers(roomId) {
 
 function findUserRoom(userId) {
   for (const [roomId, room] of rooms) {
-    if (room.candidateUser?.id === userId || 
-        room.hrUser?.id === userId || 
+    if (room.candidateUser?.id === userId ||
+        room.hrUser?.id === userId ||
         room.hiddenObservers.has(userId)) {
       return roomId;
     }

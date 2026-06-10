@@ -24,6 +24,12 @@ interface ActiveRoom {
   candidateName: string | null;
   hrName: string | null;
   createdAt: number;
+  priority?: string;
+  hrRecovery?: {
+    isRecovering: boolean;
+    disconnectedHrName?: string;
+    remainingMs?: number;
+  } | null;
 }
 
 const languages: { value: RoomLanguage; label: string }[] = [
@@ -265,21 +271,39 @@ export default function Lobby({
                     <div className="grid max-h-[min(42dvh,260px)] grid-cols-1 gap-3 overflow-y-auto pr-1 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10 sm:grid-cols-2">
                       {activeRooms.map((room) => {
                         const isLiveTranscribing = room.state === "transcribing";
-                        const canJoin = authorizedRole === "super_admin" || !room.isFull;
+                        const isRecovering = room.state === "hr_recovering";
+                        const canJoin = authorizedRole === "super_admin" || isRecovering || !room.isFull;
+                        const remainingSecs = isRecovering && room.hrRecovery?.remainingMs != null
+                          ? Math.max(0, Math.ceil(room.hrRecovery.remainingMs / 1000))
+                          : null;
                         return (
                           <motion.div
                             key={room.roomId}
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}
                             onClick={() => canJoin && handleJoinActiveRoom(room.roomId)}
-                            className={`group relative flex min-h-[120px] flex-col justify-between overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 shadow-md transition-all duration-300 select-none sm:aspect-square ${
-                              canJoin ? "cursor-pointer hover:border-indigo-500/30 hover:bg-indigo-500/[0.03]" : "cursor-not-allowed opacity-75"
+                            className={`group relative flex min-h-[120px] flex-col justify-between overflow-hidden rounded-2xl border p-4 shadow-md transition-all duration-300 select-none sm:aspect-square ${
+                              isRecovering
+                                ? "cursor-pointer border-red-500/30 bg-red-500/[0.04] hover:border-red-500/50 hover:bg-red-500/[0.07]"
+                                : canJoin
+                                ? "cursor-pointer border-white/[0.06] bg-white/[0.02] hover:border-indigo-500/30 hover:bg-indigo-500/[0.03]"
+                                : "cursor-not-allowed border-white/[0.06] bg-white/[0.02] opacity-75"
                             }`}
                           >
                             {/* Inner ambient glow */}
                             <div className={`absolute -right-6 -bottom-6 w-16 h-16 rounded-full blur-xl opacity-20 transition-all ${
-                              isLiveTranscribing ? "bg-emerald-500" : "bg-blue-500"
+                              isRecovering ? "bg-red-500" : isLiveTranscribing ? "bg-emerald-500" : "bg-blue-500"
                             }`} />
+
+                            {/* URGENT pulse dot for recovering rooms */}
+                            {isRecovering && (
+                              <div className="absolute right-3 top-3">
+                                <span className="relative flex h-2.5 w-2.5">
+                                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                                </span>
+                              </div>
+                            )}
 
                             <div className="space-y-1">
                               <div className="text-xs font-mono font-bold text-gray-300 truncate tracking-wide group-hover:text-white transition-colors">
@@ -291,7 +315,12 @@ export default function Lobby({
                                 </svg>
                                 <span>{getLanguageLabel(room.language)} · {room.participantCount}/2</span>
                               </div>
-                              {room.hrName && (
+                              {isRecovering && room.hrRecovery?.disconnectedHrName && (
+                                <div className="truncate text-[10px] font-medium text-red-400/80">
+                                  {room.hrRecovery.disconnectedHrName} disconnected
+                                </div>
+                              )}
+                              {!isRecovering && room.hrName && (
                                 <div className="truncate text-[10px] font-medium text-gray-500">
                                   HR: {room.hrName}
                                 </div>
@@ -300,7 +329,9 @@ export default function Lobby({
 
                             <div className="flex items-center justify-between pt-2 border-t border-white/[0.03] mt-2">
                               <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                                room.isFull
+                                isRecovering
+                                  ? "bg-red-500/15 text-red-300 border border-red-500/30 animate-pulse"
+                                  : room.isFull
                                   ? "bg-amber-500/10 text-amber-300 border border-amber-500/20"
                                   : isLiveTranscribing
                                   ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
@@ -308,10 +339,15 @@ export default function Lobby({
                                   ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
                                   : "bg-gray-500/10 text-gray-400 border border-gray-500/20"
                               }`}>
-                                {room.isFull ? "Ongoing / Full" : isLiveTranscribing ? "Live" : "Waiting"}
+                                {isRecovering ? "Urgent" : room.isFull ? "Ongoing / Full" : isLiveTranscribing ? "Live" : "Waiting"}
                               </span>
-                              <span className="text-[10px] text-indigo-400 font-bold group-hover:translate-x-0.5 transition-transform flex items-center gap-0.5">
-                                {authorizedRole === "super_admin" ? "Observe" : room.isFull ? "Full" : "Join Call"}
+                              <span className={`text-[10px] font-bold flex items-center gap-1 transition-transform group-hover:translate-x-0.5 ${
+                                isRecovering ? "text-red-400" : "text-indigo-400"
+                              }`}>
+                                {isRecovering
+                                  ? remainingSecs !== null ? `${remainingSecs}s` : "Rescue"
+                                  : authorizedRole === "super_admin" ? "Observe" : room.isFull ? "Full" : "Join Call"
+                                }
                                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                                 </svg>

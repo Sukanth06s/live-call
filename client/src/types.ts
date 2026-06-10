@@ -3,7 +3,7 @@ export type BlockStatus = "live" | "finalizing" | "final" | "editing";
 export type UserRole = "candidate" | "hr" | "super_admin";
 export type RoomLanguage = "english" | "tamil" | "hindi";
 
-export type InterviewState = "waiting" | "active" | "transcribing" | "paused" | "ended";
+export type InterviewState = "waiting" | "active" | "transcribing" | "paused" | "hr_recovering" | "ending" | "ended";
 export type CandidateVideoSource = "candidate_upload" | "hr_recording";
 export type CandidateVideoStatus = "uploading" | "enr" | "anr" | "archived";
 
@@ -66,6 +66,13 @@ export interface RoomState {
   activeTranscriptionSession?: ActiveTranscriptionSession;
   roomStateVersion?: number;
   state?: InterviewState;
+  priority?: "normal" | "critical";
+  hrRecovery?: {
+    isRecovering: boolean;
+    disconnectedHrName?: string;
+    remainingMs?: number;
+    deadline?: number;
+  } | null;
 }
 
 export interface CandidateVideo {

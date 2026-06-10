@@ -60,6 +60,7 @@ app.use(express.json());
 const speakerTimeouts = new Map();
 const activeDeepgramConnections = new Map(); // roomId -> { dgConnection, isDeepgramConnecting, isDgOpen, audioQueue }
 const transcriptionCountdowns = new Map(); // roomId -> countdown interval
+const hrRecoveryTimers = new Map(); // roomId → { timerId, tickId } — cancellable HR-disconnect recovery
 const allowedRoles = new Set(["candidate", "hr", "super_admin"]);
 const activeUserSockets = new Map(); // Supabase auth user id -> active socket id
 const candidateVideoBucket = "candidate-videos";
@@ -605,6 +606,174 @@ function stopTranscriptionForRoom(roomId, { emitStopped = true } = {}) {
   return true;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HR RECOVERY HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * enterHrRecoveryMode — called when the active HR socket disconnects unexpectedly.
+ * Puts the room in "hr_recovering" state and starts a 15-second countdown.
+ * The room stays alive; the candidate stays in it; any available HR can rescue it.
+ */
+function enterHrRecoveryMode(roomId, hrSocket) {
+  const room = getRoom(roomId);
+  if (!room) return;
+
+  const now = Date.now();
+  const RECOVERY_MS = 15_000;
+
+  room.state = "hr_recovering";
+  room.priority = "critical";
+  room.hrRecovery.isRecovering = true;
+  room.hrRecovery.disconnectedAt = now;
+  room.hrRecovery.deadline = now + RECOVERY_MS;
+  room.hrRecovery.disconnectedHrAuthUserId = hrSocket.data.userId;
+  room.hrRecovery.disconnectedHrName = hrSocket.data.displayName || hrSocket.data.userName || "HR";
+
+  // Remove HR from active slot but keep room alive
+  leaveRoom(roomId, hrSocket.id);
+  hrSocket.leave(roomId);
+
+  // Stop any live transcription so Deepgram doesn't leak
+  if (room.activeTranscriptionSession?.isActive || transcriptionCountdowns.has(roomId)) {
+    stopTranscriptionForRoom(roomId, { emitStopped: false });
+    // Override the state that stopTranscription set back to "paused"
+    room.state = "hr_recovering";
+  }
+
+  // Notify candidate (and super admins still in the room)
+  io.to(roomId).emit("hr-recovering", {
+    message: "Your interviewer has disconnected. Please wait — we're finding an interviewer for you.",
+    deadline: room.hrRecovery.deadline,
+    remainingMs: RECOVERY_MS,
+  });
+
+  broadcastProjectedRoomState(roomId);
+
+  // Tick every second so the candidate sees a live countdown
+  let remaining = Math.ceil(RECOVERY_MS / 1000);
+  const tickId = setInterval(() => {
+    remaining--;
+    const liveRoom = getRoom(roomId);
+    if (!liveRoom || !liveRoom.hrRecovery.isRecovering) {
+      clearInterval(tickId);
+      return;
+    }
+    io.to(roomId).emit("hr-recovery-tick", { remainingMs: Math.max(0, remaining * 1000) });
+    if (remaining <= 0) clearInterval(tickId);
+  }, 1_000);
+
+  const timerId = setTimeout(async () => {
+    clearInterval(tickId);
+    hrRecoveryTimers.delete(roomId);
+    const liveRoom = getRoom(roomId);
+    if (!liveRoom) return; // Already cleaned up
+    if (liveRoom.hrUser) {
+      // HR rejoined just before timer fired
+      console.log(`[Recovery] Timer fired for ${roomId} but HR is already back. No teardown.`);
+      return;
+    }
+    console.log(`[Recovery] 15s expired for room ${roomId} with no HR. Running teardown.`);
+    await executeFinalTeardown(roomId, hrSocket, { reason: "hr-disconnect", intentional: false });
+  }, RECOVERY_MS);
+
+  hrRecoveryTimers.set(roomId, { timerId, tickId });
+  console.log(`[Recovery] Room ${roomId} entered hr_recovering. 15s window open. Any HR can rescue.`);
+}
+
+/**
+ * cancelHrRecovery — called when any HR joins the recovering room.
+ * Clears the countdown, resets recovery metadata, returns room to active state.
+ */
+function cancelHrRecovery(roomId) {
+  const recovery = hrRecoveryTimers.get(roomId);
+  if (recovery) {
+    clearTimeout(recovery.timerId);
+    clearInterval(recovery.tickId);
+    hrRecoveryTimers.delete(roomId);
+  }
+
+  const room = getRoom(roomId);
+  if (room) {
+    room.state = "active";
+    room.priority = "normal";
+    room.hrRecovery.isRecovering = false;
+    room.hrRecovery.disconnectedAt = null;
+    room.hrRecovery.deadline = null;
+    room.hrRecovery.disconnectedHrAuthUserId = null;
+    // Keep disconnectedHrName for audit — cleared separately if needed
+  }
+  console.log(`[Recovery] HR recovery cancelled for room ${roomId}.`);
+}
+
+/**
+ * executeFinalTeardown — single authoritative teardown function.
+ * Called by the recovery timer (unexpected) or end-interview (intentional).
+ *
+ * Fixes the completed-vs-cancelled status conflict:
+ * - intentional=true  → status "completed",  reason "hr_ended"
+ * - intentional=false → status "cancelled",   reason "hr_disconnect_timeout"
+ * persistRoomTranscript now accepts a status param so it does NOT write
+ * "completed" and then get overwritten by updateInterviewClosure.
+ */
+async function executeFinalTeardown(roomId, lastHrSocket, { reason = "hr-disconnect", intentional = false } = {}) {
+  const room = getRoom(roomId);
+  if (!room) return;
+
+  // Cancel any running recovery timers
+  const pending = hrRecoveryTimers.get(roomId);
+  if (pending) {
+    clearTimeout(pending.timerId);
+    clearInterval(pending.tickId);
+    hrRecoveryTimers.delete(roomId);
+  }
+
+  clearCountdown(roomId);
+  closeDeepgramForRoom(roomId);
+  clearSpeakerTimeouts(roomId);
+
+  const closedStatus = intentional ? "completed" : "cancelled";
+  const closedReason = intentional ? "hr_ended" : "hr_disconnect_timeout";
+  const closedMessage = intentional
+    ? "The interview has ended."
+    : "The interviewer did not reconnect in time. The session has closed.";
+
+  io.to(roomId).emit("room-closed", closedMessage);
+
+  const hasTranscript = (room.blocks || []).some(b => (b.content || "").trim());
+  const hasCandidate = room.candidateUser || room.lastCandidateUser;
+
+  try {
+    if (hasTranscript && hasCandidate) {
+      // persistRoomTranscript now takes a status param — no double-write
+      await persistRoomTranscript(room, {
+        savedByUserId: lastHrSocket.data.userId,
+        reason,
+        status: closedStatus,
+        endedReason: closedReason,
+      });
+    } else {
+      await updateInterviewClosure(room, {
+        status: closedStatus,
+        reason: closedReason,
+        finalTranscript: "",
+      });
+    }
+  } catch (err) {
+    console.error("[DB Error] executeFinalTeardown persistence failed:", err);
+  }
+
+  // Evict all remaining sockets
+  const { regular, superAdmin } = getRoomSocketsByRole(roomId);
+  [...regular, ...superAdmin].forEach(sid => {
+    const s = io.sockets.sockets.get(sid);
+    if (s) { s.leave(roomId); if (s.data) s.data.roomId = null; }
+  });
+
+  deleteRoom(roomId);
+  console.log(`[Teardown] Room ${roomId} fully cleaned up. intentional=${intentional}`);
+}
+
 function getCandidateTranscriptBlocks(room) {
   const candidateName = room?.candidateUser?.name || room?.lastCandidateUser?.name;
   return (room?.blocks || []).filter((block) => {
@@ -645,7 +814,7 @@ function mapFinalTranscriptForInsert(room, interviewId, finalTranscript) {
   };
 }
 
-async function persistRoomTranscript(room, { savedByUserId, reason = "manual" } = {}) {
+async function persistRoomTranscript(room, { savedByUserId, reason = "manual", status = "completed", endedReason = "hr_ended" } = {}) {
   const candidateUser = room?.candidateUser || room?.lastCandidateUser;
   if (!candidateUser?.authUserId) {
     throw new Error("Cannot persist transcript without a candidate user");
@@ -658,37 +827,51 @@ async function persistRoomTranscript(room, { savedByUserId, reason = "manual" } 
   const finalTranscript = buildFinalTranscript(room);
   const now = new Date().toISOString();
 
+  // Build update payload — status and endedReason are caller-controlled
+  // to avoid the completed-vs-cancelled double-write conflict.
+  const basePayload = {
+    room_id: room.roomId,
+    hr_user_id: hrUserId,
+    candidate_user_id: candidateUserId,
+    status,
+    ended_at: now,
+    final_transcript: finalTranscript,
+  };
+
   if (!room.interviewSessionId) {
-    const { data, error } = await supabaseAdmin
+    let insertPayload = { ...basePayload, started_at: now };
+
+    // Try with ended_reason column first; fall back if column doesn't exist
+    let result = await supabaseAdmin
       .from("interviews")
-      .insert([{
-        room_id: room.roomId,
-        hr_user_id: hrUserId,
-        candidate_user_id: candidateUserId,
-        status: "completed",
-        started_at: now,
-        ended_at: now,
-        final_transcript: finalTranscript
-      }])
+      .insert([{ ...insertPayload, ended_reason: endedReason }])
       .select()
       .single();
 
-    if (error) throw error;
-    room.interviewSessionId = data.id;
+    if (result.error && /ended_reason/i.test(result.error.message || "")) {
+      result = await supabaseAdmin
+        .from("interviews")
+        .insert([insertPayload])
+        .select()
+        .single();
+    }
+
+    if (result.error) throw result.error;
+    room.interviewSessionId = result.data.id;
   } else {
-    const { error } = await supabaseAdmin
+    let result = await supabaseAdmin
       .from("interviews")
-      .update({
-        room_id: room.roomId,
-        hr_user_id: hrUserId,
-        candidate_user_id: candidateUserId,
-        status: "completed",
-        ended_at: now,
-        final_transcript: finalTranscript
-      })
+      .update({ ...basePayload, ended_reason: endedReason })
       .eq("id", room.interviewSessionId);
 
-    if (error) throw error;
+    if (result.error && /ended_reason/i.test(result.error.message || "")) {
+      result = await supabaseAdmin
+        .from("interviews")
+        .update(basePayload)
+        .eq("id", room.interviewSessionId);
+    }
+
+    if (result.error) throw result.error;
   }
 
   const deleteResult = await supabaseAdmin
@@ -707,13 +890,14 @@ async function persistRoomTranscript(room, { savedByUserId, reason = "manual" } 
     if (error) throw error;
   }
 
-  console.log(`[DB] Persisted transcript ${room.interviewSessionId} for candidate ${candidateUserId} (${reason})`);
+  console.log(`[DB] Persisted transcript ${room.interviewSessionId} for candidate ${candidateUserId} (${reason}, status=${status})`);
   return {
     interviewId: room.interviewSessionId,
     savedAt: now,
     blockCount: formattedBlocks.length,
   };
 }
+
 
 async function loadLatestCandidateTranscript(candidateAuthUserId, currentInterviewId) {
   if (!candidateAuthUserId) return null;
@@ -1286,6 +1470,35 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // FIX: Prevent phantom duplicate rooms.
+    // If this candidate already has a live or recovering room, redirect them
+    // back into it instead of creating a second one.
+    const existingRoom = getAllRooms().find(
+      (r) =>
+        r.candidateName &&
+        (getRoom(r.roomId)?.candidateUser?.authUserId === socket.data.userId ||
+          getRoom(r.roomId)?.lastCandidateUser?.authUserId === socket.data.userId)
+    );
+    if (existingRoom) {
+      const liveRoom = getRoom(existingRoom.roomId);
+      if (liveRoom) {
+        const durableName = socket.data.displayName || userName || getEmailPrefix(socket.data.email);
+        socket.data.userName = durableName;
+        socket.data.roomId = liveRoom.roomId;
+        socket.data.role = "candidate";
+        socket.data.language = liveRoom.language;
+        socket.data.agoraUid = createAgoraUid(socket.data.userId, liveRoom.roomId, "candidate");
+
+        joinRoom(liveRoom.roomId, socket.id, durableName, socket.data.userId, "candidate", socket.data.agoraUid);
+        socket.join(liveRoom.roomId);
+
+        socket.emit("join-ack", { roomId: liveRoom.roomId, role: "candidate", language: liveRoom.language });
+        broadcastProjectedRoomState(liveRoom.roomId);
+        console.log(`[Recovery] Candidate rejoined existing room ${liveRoom.roomId} instead of creating a new one.`);
+        return;
+      }
+    }
+
     const roomId = createInternalRoomId();
     const roomLanguage = normalizeLanguage(language);
     const durableName = socket.data.displayName || userName || getEmailPrefix(socket.data.email);
@@ -1315,6 +1528,10 @@ io.on("connection", (socket) => {
       socket.emit("join-error", "Room is no longer available.");
       return;
     }
+
+    const isRecoveringRoom = room.state === "hr_recovering";
+
+    // Candidate guard: must be the original candidate
     if (
       requestedRole === "candidate" &&
       room.candidateUser?.authUserId !== socket.data.userId &&
@@ -1323,73 +1540,96 @@ io.on("connection", (socket) => {
       socket.emit("join-error", "Candidates must choose a language and use Join a Room.");
       return;
     }
+
+    // HR guard: language must match
     if (requestedRole === "hr" && room.language !== socket.data.language) {
       socket.emit("join-error", "This candidate is waiting for a different language.");
       return;
     }
-    if (requestedRole === "super_admin" && (!room.candidateUser || !room.hrUser)) {
+
+    // Super Admin guard: allow observing recovering rooms (HR is absent but candidate is present)
+    if (requestedRole === "super_admin" && !isRecoveringRoom && (!room.candidateUser || !room.hrUser)) {
       socket.emit("join-error", "Super Admins can only observe full ongoing calls.");
       return;
     }
-    if (room) {
-      if (
-        requestedRole === "candidate" &&
-        room.candidateUser &&
-        room.candidateUser.authUserId !== socket.data.userId
-      ) {
-        socket.emit("join-error", "This room is already full: A Candidate has already joined this session.");
+
+    // Full-room guards
+    if (
+      requestedRole === "candidate" &&
+      room.candidateUser &&
+      room.candidateUser.authUserId !== socket.data.userId
+    ) {
+      socket.emit("join-error", "This room is already full: A Candidate has already joined this session.");
+      return;
+    }
+    // HR full-room guard: skip if room is recovering (any HR can rescue)
+    if (
+      requestedRole === "hr" &&
+      !isRecoveringRoom &&
+      room.hrUser &&
+      room.hrUser.authUserId !== socket.data.userId
+    ) {
+      socket.emit("join-error", "This room is already full: An HR Interviewer has already joined this session.");
+      return;
+    }
+    if (requestedRole === "super_admin" && room.hiddenObservers.size > 0) {
+      const existingObserver = Array.from(room.hiddenObservers.values()).find(
+        (observer) => observer.authUserId === socket.data.userId
+      );
+      if (!existingObserver) {
+        socket.emit("join-error", "This room is already full: A Super Admin Observer has already joined this session.");
         return;
-      }
-      if (
-        requestedRole === "hr" &&
-        room.hrUser &&
-        room.hrUser.authUserId !== socket.data.userId
-      ) {
-        socket.emit("join-error", "This room is already full: An HR Interviewer has already joined this session.");
-        return;
-      }
-      if (requestedRole === "super_admin" && room.hiddenObservers.size > 0) {
-        const existingObserver = Array.from(room.hiddenObservers.values()).find(
-          (observer) => observer.authUserId === socket.data.userId
-        );
-        if (!existingObserver) {
-          socket.emit("join-error", "This room is already full: A Super Admin Observer has already joined this session.");
-          return;
-        }
       }
     }
 
-    if (room) {
-      const existingSocketIdForRole =
-        requestedRole === "candidate"
-          ? room.candidateUser?.id
-          : requestedRole === "hr"
-          ? room.hrUser?.id
-          : Array.from(room.hiddenObservers.values()).find((observer) => observer.authUserId === socket.data.userId)?.id;
+    // Evict stale socket for this role if it exists
+    const existingSocketIdForRole =
+      requestedRole === "candidate"
+        ? room.candidateUser?.id
+        : requestedRole === "hr"
+        ? room.hrUser?.id
+        : Array.from(room.hiddenObservers.values()).find((observer) => observer.authUserId === socket.data.userId)?.id;
 
-      if (existingSocketIdForRole && existingSocketIdForRole !== socket.id) {
-        const existingRoomSocket = io.sockets.sockets.get(existingSocketIdForRole);
-        if (existingRoomSocket) {
-          existingRoomSocket.data.isBeingReplaced = true;
-          existingRoomSocket.data.replacedBySocketId = socket.id;
-          existingRoomSocket.leave(roomId);
-          existingRoomSocket.data.roomId = null;
-          existingRoomSocket.emit("force-logout", "This account was signed in from another device. You have been logged out here.");
-          existingRoomSocket.disconnect(true);
-        }
+    if (existingSocketIdForRole && existingSocketIdForRole !== socket.id) {
+      const existingRoomSocket = io.sockets.sockets.get(existingSocketIdForRole);
+      if (existingRoomSocket) {
+        existingRoomSocket.data.isBeingReplaced = true;
+        existingRoomSocket.data.replacedBySocketId = socket.id;
+        existingRoomSocket.leave(roomId);
+        existingRoomSocket.data.roomId = null;
+        existingRoomSocket.emit("force-logout", "This account was signed in from another device. You have been logged out here.");
+        existingRoomSocket.disconnect(true);
       }
     }
 
     const durableName = socket.data.displayName || userName || getEmailPrefix(socket.data.email);
-
     socket.data.userName = durableName;
     socket.data.roomId = roomId;
     socket.data.role = requestedRole;
     socket.data.language = room.language;
     socket.data.agoraUid = createAgoraUid(socket.data.userId, roomId, requestedRole);
-    
+
     joinRoom(roomId, socket.id, durableName, socket.data.userId, requestedRole, socket.data.agoraUid);
     socket.join(roomId);
+
+    // If HR joins a recovering room — any HR can rescue — cancel the timer and notify
+    if (requestedRole === "hr" && isRecoveringRoom) {
+      const prevHrName = room.hrRecovery?.disconnectedHrName || "the previous interviewer";
+      cancelHrRecovery(roomId);
+      io.to(roomId).emit("hr-rejoined", {
+        message: `An interviewer has joined. The session continues.`,
+        hrName: durableName,
+        prevHrName,
+      });
+      console.log(`[Recovery] ${durableName} rescued room ${roomId} (prev HR: ${prevHrName}).`);
+    } else if (requestedRole === "hr" && hrRecoveryTimers.has(roomId)) {
+      // Fallback: original HR reconnected while timer running
+      cancelHrRecovery(roomId);
+      io.to(roomId).emit("hr-rejoined", {
+        message: "Your interviewer has reconnected. The session continues.",
+        hrName: durableName,
+      });
+    }
 
     if (requestedRole === "hr") {
       try {
@@ -1490,39 +1730,20 @@ io.on("connection", (socket) => {
   socket.on("end-interview", async ({ roomId }) => {
     if (!isSocketInRoom(socket, roomId)) return;
     if (socket.data.role !== "hr" && socket.data.role !== "super_admin") return;
-    
+
     const room = getRoom(roomId);
     if (!room) return;
 
-    clearCountdown(roomId);
-    room.state = "ended";
-    room.activeTranscriptionSession.isActive = false;
-    finalizeAllActiveSpeakers(roomId);
-    clearSpeakerTimeouts(roomId);
+    // Mark intentional so handleLeave (triggered by disconnect after this) skips recovery
+    socket.data.intentionalLeave = true;
 
-    closeDeepgramForRoom(roomId);
-
-    io.to(roomId).emit("room-closed", "The interview has ended. The session is closed.");
-
-    try {
-      if ((room.blocks || []).some((block) => (block.content || "").trim()) && (room.candidateUser || room.lastCandidateUser)) {
-        await persistRoomTranscript(room, { savedByUserId: socket.data.userId, reason: "interview-ended" });
-      } else {
-        await updateInterviewClosure(room, { status: "completed", reason: "hr_ended", finalTranscript: "" });
-      }
-    } catch (err) {
-      console.error("[DB Error] End interview persistence failed:", err);
+    // Stop any live transcription cleanly before teardown
+    if (room.activeTranscriptionSession?.isActive || transcriptionCountdowns.has(roomId)) {
+      stopTranscriptionForRoom(roomId, { emitStopped: false });
     }
 
-    const { regular, superAdmin } = getRoomSocketsByRole(roomId);
-    [...regular, ...superAdmin].forEach(sid => {
-      const s = io.sockets.sockets.get(sid);
-      if (s) {
-        s.leave(roomId);
-        s.data.roomId = null;
-      }
-    });
-    deleteRoom(roomId);
+    // Single authoritative teardown — sets status "completed", reason "hr_ended"
+    await executeFinalTeardown(roomId, socket, { reason: "hr-ended", intentional: true });
   });
 
   socket.on("stop-transcription", async ({ roomId }) => {
@@ -1768,8 +1989,16 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("leave-room", () => handleLeave(socket));
+  socket.on("leave-room", () => {
+    // Explicit leave is intentional — skip recovery mode for HR
+    if (socket.data.role === "hr") {
+      socket.data.intentionalLeave = true;
+    }
+    handleLeave(socket);
+  });
   socket.on("disconnect", () => {
+    // intentionalLeave is only true if set by end-interview or leave-room
+    // An unexpected disconnect will NOT have it set, triggering recovery
     handleLeave(socket);
   });
 });
@@ -1781,73 +2010,72 @@ function handleLeave(socket) {
 
   const roomId = socket.data.roomId;
   const role = socket.data.role;
-  if (roomId) {
-    const room = getRoom(roomId);
-    const isCurrentHrSocket = room?.hrUser?.id === socket.id;
+  if (!roomId) return;
 
-    if (socket.data.isBeingReplaced) {
-      socket.leave(roomId);
-      return;
-    }
+  const room = getRoom(roomId);
 
-    if (room && role === "hr" && !isCurrentHrSocket) {
-      leaveRoom(roomId, socket.id);
-      socket.leave(roomId);
-      broadcastProjectedRoomState(roomId);
-      return;
-    }
-
-    if (room && role === "hr" && isCurrentHrSocket) {
-      console.log(`[Socket] Interviewer (HR) left/disconnected room ${roomId}. Closing room.`);
-      clearCountdown(roomId);
-      
-      // Notify remaining participants in the room
-      io.to(roomId).emit("room-closed", "The Interviewer (HR) has disconnected. The session is closed.");
-      
-      if ((room.blocks || []).some((block) => (block.content || "").trim()) && (room.candidateUser || room.lastCandidateUser)) {
-        persistRoomTranscript(room, { savedByUserId: socket.data.userId, reason: "hr-disconnect" })
-          .then(() => updateInterviewClosure(room, { status: "cancelled", reason: "hr_disconnect_timeout" }))
-          .then(() => console.log(`[DB] Successfully closed session on HR disconnect: ${room.interviewSessionId}`))
-          .catch(err => console.error("[DB Error] HR disconnect persistence failed:", err));
-      } else {
-        updateInterviewClosure(room, { status: "cancelled", reason: "hr_disconnect_timeout", finalTranscript: "" })
-          .catch(err => console.error("[DB Error] HR disconnect status update failed:", err));
-        console.log(`[DB] Skipped HR disconnect persistence for room ${roomId}: no candidate transcript to save.`);
-      }
-      
-      // Clean up Deepgram connection
-      closeDeepgramForRoom(roomId);
-      clearSpeakerTimeouts(roomId);
-      
-      // Evict all sockets in that room
-      const { regular, superAdmin } = getRoomSocketsByRole(roomId);
-      const allSockets = [...regular, ...superAdmin];
-      allSockets.forEach(sid => {
-        const s = io.sockets.sockets.get(sid);
-        if (s) {
-          s.leave(roomId);
-          s.data.roomId = null;
-        }
-      });
-      
-      deleteRoom(roomId);
-      return;
-    }
-
-    if (room && role === "candidate" && (room.activeTranscriptionSession.isActive || transcriptionCountdowns.has(roomId))) {
-      stopTranscriptionForRoom(roomId);
-    }
-
-    finalizeAllActiveSpeakers(roomId);
-    const updatedRoom = leaveRoom(roomId, socket.id);
-    if (!updatedRoom) {
-      clearCountdown(roomId);
-      closeDeepgramForRoom(roomId);
-      clearSpeakerTimeouts(roomId);
-    } else {
-      broadcastProjectedRoomState(roomId);
-    }
+  // Stale socket being replaced by a new connection — evict silently
+  if (socket.data.isBeingReplaced) {
     socket.leave(roomId);
+    return;
+  }
+
+  // ── HR LEAVE ─────────────────────────────────────────────────────────────
+  if (role === "hr") {
+    const isActiveHrSocket = room?.hrUser?.id === socket.id;
+
+    if (!room || !isActiveHrSocket) {
+      // Stale / already-replaced HR socket — remove silently
+      if (room) {
+        leaveRoom(roomId, socket.id);
+        broadcastProjectedRoomState(roomId);
+      }
+      socket.leave(roomId);
+      return;
+    }
+
+    // Don't double-arm a recovery timer
+    if (hrRecoveryTimers.has(roomId)) {
+      socket.leave(roomId);
+      return;
+    }
+
+    if (socket.data.intentionalLeave) {
+      // Intentional leave (End Interview button or Leave Room button)
+      // executeFinalTeardown is already called by end-interview handler;
+      // for leave-room we call it here.
+      void executeFinalTeardown(roomId, socket, { reason: "hr-ended", intentional: true });
+    } else {
+      // Unexpected disconnect (crash, network loss, browser close without leave-room)
+      // Enter recovery mode: room survives, any HR can rescue within 15s
+      enterHrRecoveryMode(roomId, socket);
+    }
+    return;
+  }
+
+  // ── CANDIDATE / SUPER ADMIN LEAVE ────────────────────────────────────────
+  if (!room) {
+    socket.leave(roomId);
+    return;
+  }
+
+  if (role === "candidate" && (room.activeTranscriptionSession?.isActive || transcriptionCountdowns.has(roomId))) {
+    stopTranscriptionForRoom(roomId, { emitStopped: true });
+  }
+
+  finalizeAllActiveSpeakers(roomId);
+  leaveRoom(roomId, socket.id);
+  socket.leave(roomId);
+
+  // Only auto-delete if room is truly empty AND not in recovery
+  const fresh = getRoom(roomId);
+  if (fresh && !fresh.candidateUser && !fresh.hrUser && fresh.hiddenObservers.size === 0 && !hrRecoveryTimers.has(roomId)) {
+    clearCountdown(roomId);
+    closeDeepgramForRoom(roomId);
+    clearSpeakerTimeouts(roomId);
+    deleteRoom(roomId);
+  } else if (fresh) {
+    broadcastProjectedRoomState(roomId);
   }
 }
 

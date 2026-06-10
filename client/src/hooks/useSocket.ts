@@ -27,6 +27,12 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
   const [transcriptSaveStatus, setTranscriptSaveStatus] = useState<string | null>(null);
   const [isTranscriptionChanging, setIsTranscriptionChanging] = useState(false);
   const [transcriptionCountdown, setTranscriptionCountdown] = useState<number | null>(null);
+  const [hrRecovery, setHrRecovery] = useState<{
+    isRecovering: boolean;
+    message: string;
+    remainingMs: number;
+    deadline: number;
+  } | null>(null);
 
   useEffect(() => {
     if (!sessionToken) return;
@@ -44,6 +50,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       setTranscriptSaveStatus(null);
       setIsTranscriptionChanging(false);
       setTranscriptionCountdown(null);
+      setHrRecovery(null);
       roomStateVersionRef.current = 0;
     }
 
@@ -107,6 +114,17 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
         setIsTranscriptionChanging(false);
         setTranscriptionCountdown(null);
       }
+      // Sync hrRecovery from room-state broadcast
+      if (state.hrRecovery?.isRecovering) {
+        setHrRecovery({
+          isRecovering: true,
+          message: "Your interviewer has disconnected. Please wait — we're finding an interviewer for you.",
+          remainingMs: state.hrRecovery.remainingMs ?? 15000,
+          deadline: state.hrRecovery.deadline ?? Date.now() + 15000,
+        });
+      } else {
+        setHrRecovery(null);
+      }
     });
 
     socket.on("transcription-starting", ({ countdown }: { countdown: number }) => {
@@ -127,6 +145,21 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     socket.on("interview-ended", () => {
       setIsTranscriptionChanging(false);
       setTranscriptionCountdown(null);
+    });
+
+    // HR Recovery events
+    socket.on("hr-recovering", ({ message, remainingMs, deadline }: { message: string; remainingMs: number; deadline: number }) => {
+      console.log("[Socket] hr-recovering:", message, remainingMs);
+      setHrRecovery({ isRecovering: true, message, remainingMs, deadline });
+    });
+
+    socket.on("hr-recovery-tick", ({ remainingMs }: { remainingMs: number }) => {
+      setHrRecovery((prev) => prev ? { ...prev, remainingMs } : null);
+    });
+
+    socket.on("hr-rejoined", ({ message }: { message: string }) => {
+      console.log("[Socket] hr-rejoined:", message);
+      setHrRecovery(null);
     });
 
     // Legacy speaking indicators - room-state or block-update will handle visual speaking states
@@ -240,6 +273,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       setTranscriptSaveStatus(null);
       setIsTranscriptionChanging(false);
       setTranscriptionCountdown(null);
+      setHrRecovery(null);
       roomStateVersionRef.current = 0;
     }
   }, []);
@@ -280,6 +314,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     transcriptSaveStatus,
     isTranscriptionChanging,
     transcriptionCountdown,
+    hrRecovery,
     joinRoom,
     createCandidateRoom,
     leaveRoom,

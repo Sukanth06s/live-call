@@ -92,6 +92,7 @@ export default function Home() {
     transcriptSaveStatus,
     isTranscriptionChanging,
     transcriptionCountdown,
+    hrRecovery,
     joinRoom,
     createCandidateRoom,
     leaveRoom: socketLeaveRoom,
@@ -455,6 +456,7 @@ export default function Home() {
       isTranscribing={activeTranscriptionSession?.isActive || false}
       isTranscriptionChanging={isTranscriptionChanging}
       transcriptionCountdown={transcriptionCountdown}
+      hrRecovery={hrRecovery}
       onToggleMute={handleToggleMute}
       onToggleVideo={handleToggleVideo}
       onLeaveRoom={handleLeaveRoom}
