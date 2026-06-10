@@ -143,10 +143,8 @@ function getRoomsForRole(role, language = null) {
     .filter((room) => {
       if (role === "hr") {
         const matchesLanguage = room.language === normalizedLanguage;
-        // Show waiting rooms (candidate waiting, no HR) OR recovering rooms (HR lost connection)
-        const isWaiting = Boolean(room.candidateName) && !room.hrName;
-        const isRecovering = room.state === "hr_recovering" && Boolean(room.candidateName);
-        return matchesLanguage && (isWaiting || isRecovering);
+        // Show waiting rooms, recovering rooms, AND full ongoing rooms (any room with a candidate)
+        return matchesLanguage && Boolean(room.candidateName);
       }
       if (role === "super_admin") {
         // Full rooms OR rooms in HR recovery mode
