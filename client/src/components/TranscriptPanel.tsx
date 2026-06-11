@@ -275,7 +275,10 @@ export default function TranscriptPanel({
                       {candidateBlocks.map((block) => {
                         const isLive = block.status === "live";
                         return (
-                          <span
+                          <motion.span
+                            layout
+                            initial={{ opacity: 0, y: 5 }}
+                            animate={{ opacity: 1, y: 0 }}
                             key={block.id}
                             className={`inline transition-all duration-200 mr-1.5 ${
                               isLive 
@@ -307,7 +310,7 @@ export default function TranscriptPanel({
                             ) : (
                               block.content
                             )}
-                          </span>
+                          </motion.span>
                         );
                       })}
                     </AnimatePresence>

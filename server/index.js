@@ -1715,7 +1715,7 @@ io.on("connection", (socket) => {
             console.log(`[Deepgram] Starting live transcription for room ${roomId}`);
             const dgConnection = deepgram.listen.live({ model: "nova-2", smart_format: true, encoding: "linear16", sample_rate: 16000 });
             dgState.dgConnection = dgConnection;
-            setupDeepgramEvents(dgConnection, roomId, activeRoom.candidateUser?.name || "Candidate", activeRoom.candidateUser?.id);
+            setupDeepgramEvents(dgConnection, roomId, activeRoom.candidateUser?.name || "Candidate", activeRoom.candidateUser?.id, "candidate");
           } catch (err) {
             console.error("[Deepgram] Start failed:", err);
             dgState.isDeepgramConnecting = false;
@@ -1819,7 +1819,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  function setupDeepgramEvents(dg, roomId, userName, speakerId) {
+  function setupDeepgramEvents(dg, roomId, userName, speakerId, forcedRole = "candidate") {
     dg.on(LiveTranscriptionEvents.Open, () => {
       console.log(`[Deepgram] Connection opened for room: ${roomId}`);
       const dgState = activeDeepgramConnections.get(roomId);
@@ -1844,18 +1844,11 @@ io.on("connection", (socket) => {
           const crypto = require('crypto');
           const blockId = crypto.randomUUID(); // uuid v4
           
-          let speakerRole = "candidate";
-          if (room.hrUser && room.hrUser.name === userName) {
-            speakerRole = "hr";
-          } else if (room.candidateUser && room.candidateUser.name === userName) {
-            speakerRole = "candidate";
-          }
-
           const newBlock = {
             id: blockId,
             speakerId: speakerId,
             speakerName: userName,
-            speakerRole: speakerRole,
+            speakerRole: forcedRole,
             content: "",
             segments: [],
             status: "live",
