@@ -291,16 +291,19 @@ Normal leave:
 
 HR disconnect:
 
-1. Server closes the room.
-2. Remaining sockets receive:
+1. Server puts the room in `hr_recovering` state.
+2. A 15-second timer starts. Candidate UI shows "Waiting for Interviewer".
+3. Any HR with the same language can see the recovering room in their dashboard and join to rescue it.
+4. If the timer expires, the server closes the room.
+5. Remaining sockets receive:
 
 ```txt
 room-closed "The Interviewer (HR) has disconnected..."
 ```
 
-3. Transcript is finalized and persisted if an interview row exists.
-4. Deepgram connection is closed.
-5. Room is deleted.
+6. Transcript is finalized and persisted if an interview row exists.
+7. Deepgram connection is closed.
+8. Room is deleted.
 
 ## 13. Deployment Walkthrough
 
@@ -344,3 +347,19 @@ The heap setting is recommended because Next/Turbopack can use more memory durin
    - Candidate speech appears in transcript.
    - A second candidate/HR/admin cannot join the occupied room slot.
    - Logging the same account on another device logs out the older device only.
+
+## 15. Known Troubleshooting
+
+**Deepgram throws instant ErrorEvent upon connection:**
+- Symptom: When HR clicks "Start Transcription", the countdown finishes, but Deepgram instantly emits an `ErrorEvent` and closes the connection.
+- Cause: The `DEEPGRAM_API_KEY` is invalid, revoked, out of funds, or doesn't have permissions for the `nova-2` model.
+- Fix: Regenerate a fresh Deepgram API key with full privileges and update the environment variables.
+
+**Transcripts fail to render silently:**
+- Symptom: Audio flows to Deepgram successfully and Socket.io broadcasts `block-update` events, but the blocks never appear in the UI.
+- Cause: Using standard HTML `<span>` elements directly inside Framer Motion's `<AnimatePresence>`.
+- Fix: Wrap mapped blocks in `<motion.span>` components so Framer Motion can track their mount/unmount lifecycles.
+
+**Candidate transcripts missing when testing locally with same display names:**
+- Symptom: A developer testing the app names both the Candidate and the HR "TestUser". The server accidentally infers the Candidate's speaker stream is `"hr"` and the UI filters it out.
+- Fix: The `speakerRole` is strictly forced to `"candidate"` in `index.js` when streaming to Deepgram, as only Candidates stream audio.

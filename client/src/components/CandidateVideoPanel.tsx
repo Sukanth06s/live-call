@@ -627,7 +627,11 @@ export default function CandidateVideoPanel({
           {canResetUpload && (
             <button
               type="button"
-              onClick={() => resettableVideo && void cancelUpload(resettableVideo.id)}
+              onClick={() => {
+                if (window.confirm("Are you sure you want to reset the current video upload?")) {
+                  resettableVideo && void cancelUpload(resettableVideo.id);
+                }
+              }}
               className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-200 transition hover:bg-amber-500/20"
             >
               Reset Upload
@@ -670,7 +674,11 @@ export default function CandidateVideoPanel({
                   </button>
                   <button
                     type="button"
-                    onClick={() => void reviewVideo("dismiss")}
+                    onClick={() => {
+                      if (window.confirm("Are you sure you want to dismiss this verification video?")) {
+                        void reviewVideo("dismiss");
+                      }
+                    }}
                     className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs font-bold text-red-300 transition hover:bg-red-500/20"
                   >
                     Dismiss

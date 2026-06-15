@@ -197,7 +197,7 @@ Success response:
   "rooms": [
     {
       "roomId": "12",
-      "state": "transcribing",
+      "state": "transcribing", // "waiting", "active", "hr_recovering", etc.
       "participantCount": 2,
       "createdAt": 1779348202581
     }
@@ -303,7 +303,7 @@ Payload:
 {
   roomId: string;
   interviewSessionId: string | null;
-  state: "waiting" | "active" | "transcribing" | "paused" | "ended";
+  state: "waiting" | "active" | "hr_recovering" | "transcribing" | "paused" | "ended";
   users: RoomUser[];
   blocks: TranscriptBlock[];
   activeTranscriptionSession: ActiveTranscriptionSession;
@@ -453,7 +453,7 @@ Backend behavior:
 
 - Removes socket from room.
 - Deletes empty room.
-- If HR leaves, closes the whole room.
+- If HR leaves, triggers a 15-second `hr_recovering` state to allow for accidental disconnect recovery. If timer expires, closes the whole room.
 
 ### toggle-mute
 

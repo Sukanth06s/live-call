@@ -174,7 +174,11 @@ export default function TranscriptPanel({
               <div className="flex flex-wrap items-center gap-2">
                 {isHr && onSaveFinalTranscript && (
                   <button
-                    onClick={onSaveFinalTranscript}
+                    onClick={() => {
+                      if (window.confirm("Are you sure you want to save this as the final transcript?")) {
+                        onSaveFinalTranscript();
+                      }
+                    }}
                     className="flex items-center gap-1 rounded-lg border border-blue-500/20 bg-blue-500/10 px-2.5 py-1.5 text-[10px] font-bold uppercase text-blue-300 transition-all hover:bg-blue-500 hover:text-white sm:px-3 sm:text-[11px]"
                     title="Save final transcript under this candidate"
                   >
@@ -199,7 +203,11 @@ export default function TranscriptPanel({
                 </button>
                 {onClearTranscript && (
                   <button
-                    onClick={onClearTranscript}
+                    onClick={() => {
+                      if (window.confirm("Are you sure you want to clear the entire transcript? This cannot be undone.")) {
+                        onClearTranscript();
+                      }
+                    }}
                     className="flex items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1.5 text-[10px] font-bold uppercase text-red-400 transition-all hover:bg-red-500 hover:text-white sm:px-3 sm:text-[11px]"
                     title="Clear transcript content"
                   >

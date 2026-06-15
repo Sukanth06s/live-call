@@ -212,14 +212,17 @@ Room shape:
 ```js
 {
   roomId,
+  language,
   interviewSessionId,
-  state,
+  state, // "waiting" | "active" | "hr_recovering" | "transcribing" | "paused" | "ended"
   candidateUser,
   hrUser,
   hiddenObservers,
   activeTranscriptionSession,
   blocks,
   activeSpeakers,
+  roomStateVersion,
+  hrRecovery, // { isRecovering, timeoutId, ... }
   createdAt
 }
 ```
@@ -260,7 +263,7 @@ if (role && role !== requestedRole) {
 Room capacity:
 
 - Candidate slot occupied -> reject.
-- HR slot occupied -> reject.
+- HR slot occupied -> reject (UNLESS room state is `hr_recovering`, then allow rescue).
 - Super admin observer slot occupied -> reject.
 
 Syntax choice:
@@ -444,17 +447,18 @@ Backend:
 
 If HR disconnects:
 
-1. Room closes immediately.
-2. Remaining sockets receive `room-closed`.
-3. Final transcript is persisted if possible.
-4. Deepgram connection closes.
-5. All sockets leave the room.
-6. Room is deleted.
+1. Room enters `hr_recovering` state.
+2. A 15-second grace period countdown begins.
+3. Candidate UI shows a "Waiting for Interviewer" banner.
+4. Any HR matching the language can see the recovering room in their dashboard and join to rescue it.
+5. If rescued, the session continues seamlessly.
+6. If the 15-second timer expires with no HR rescue, the room is torn down: remaining sockets receive `room-closed`, final transcript is persisted, Deepgram closes, and the room is deleted.
 
 Reason:
 
-- HR is the meeting owner/interviewer.
-- Candidate should not remain in an orphaned interview session.
+- Real-world networks drop connections.
+- Candidates should not lose their entire interview session because the HR's internet flickered for 5 seconds.
+- Disconnected HRs (or backup HRs) have 15 seconds to resume the interview.
 
 ## 20. Error Handling
 

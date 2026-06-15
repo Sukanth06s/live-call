@@ -78,10 +78,10 @@ Candidate waits
 HR flow:
 
 ```txt
-HR opens waiting list
-Server returns candidates matching HR language
+HR opens dashboard
+Server returns all rooms (waiting, active, recovering) matching HR language
 HR joins candidate room
-Room becomes active/full
+Room becomes active/full (or resumes if recovering)
 ```
 
 Room state is held in memory in `server/rooms.js`.
@@ -134,6 +134,7 @@ Current statuses:
 ```txt
 waiting_for_hr
 active
+hr_recovering
 completed
 cancelled
 ```
@@ -422,7 +423,7 @@ Candidate microphone track
   -> TranscriptPanel
 ```
 
-Only the candidate browser streams PCM to Deepgram. HR starts/stops the session, but HR audio is not transcribed.
+Only the candidate browser streams PCM to Deepgram. HR starts/stops the session, but HR audio is not transcribed. The backend explicitly forces `speakerRole: "candidate"` on all incoming Deepgram blocks to prevent filtering bugs if the candidate and HR share the same display name.
 
 Transcription start:
 
@@ -431,7 +432,7 @@ HR clicks Start Transcription
 Server starts countdown
 Room activeTranscriptionSession.isActive = true
 Candidate browser starts PCM pipeline
-Transcript blocks stream back to room
+Transcript blocks stream back to room with role "candidate"
 ```
 
 ## 13. Socket and Realtime Updates

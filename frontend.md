@@ -130,6 +130,7 @@ It composes:
 ```ts
 useSocket(accessToken)
 useAgora()
+// Only Candidate streams audio to Deepgram
 useDeepgram({ socket, roomId, userName })
 ```
 
@@ -137,6 +138,7 @@ Syntax choice:
 
 - Keeping orchestration in one page avoids hidden cross-hook dependency loops.
 - Hooks own specific external systems: Socket.IO, Agora, Web Audio.
+- The `RoomPage` receives `isTranscribing={activeTranscriptionSession?.isActive}` from global state, NOT local `useDeepgram` state, because HR does not stream audio but still needs the UI to reflect global transcription status.
 
 ## 7. Session Loading
 
@@ -483,6 +485,9 @@ Display state:
 - Elapsed timer.
 - Word count.
 - Total committed turns.
+
+React/Framer Motion Detail:
+- `AnimatePresence` must map over `<motion.span>` components, not standard HTML `<span>`. Using regular spans causes silent DOM rendering failures during array updates.
 
 ## 21. Styling Choices
 
