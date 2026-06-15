@@ -321,19 +321,20 @@ function getRoomByInterviewId(interviewId) {
   return null;
 }
 
-function getRoomByCandidateAndHr(candidateUserId, hrUserId) {
-  if (!candidateUserId || !hrUserId) return null;
+function getRoomByCandidateId(candidateUserId) {
+  if (!candidateUserId) return null;
   for (const room of getAllRooms()) {
     const fullRoom = getRoom(room.roomId);
-    if (fullRoom?.candidateUser?.authUserId === candidateUserId && fullRoom.hrUser?.authUserId === hrUserId) {
+    const roomCandidateId = fullRoom?.candidateUser?.authUserId || fullRoom?.lastCandidateUser?.authUserId;
+    if (roomCandidateId === candidateUserId) {
       return fullRoom;
     }
   }
   return null;
 }
 
-function getRoomForCandidateVideoAction(video, hrUserId) {
-  return getRoomByInterviewId(video?.interview_id) || getRoomByCandidateAndHr(video?.candidate_user_id, hrUserId);
+function getRoomForCandidateVideoAction(video) {
+  return getRoomByInterviewId(video?.interview_id) || getRoomByCandidateId(video?.candidate_user_id);
 }
 
 function assertRoomParticipant(room, userId, role) {
@@ -1280,7 +1281,7 @@ app.post("/api/candidate-videos/:videoId/cancel-upload", async (req, res) => {
       .eq("id", videoId)
       .single();
     if (error) throw error;
-    const room = getRoomForCandidateVideoAction(video, user.id);
+    const room = getRoomByCandidateId(video.candidate_user_id);
     const isOwningCandidate = profile.role === "candidate" && video.candidate_user_id === user.id;
     const isAssignedHr = profile.role === "hr" && room?.hrUser?.authUserId === user.id;
     if (!isOwningCandidate && !isAssignedHr) {
@@ -1318,7 +1319,7 @@ app.post("/api/candidate-videos/:videoId/complete-upload", async (req, res) => {
     if (error) throw error;
     if (video.status !== "uploading") return res.status(409).json({ error: "Upload has already been completed" });
 
-    const room = getRoomForCandidateVideoAction(video, user.id);
+    const room = getRoomForCandidateVideoAction(video);
     if (video.source === "candidate_upload") {
       if (profile.role !== "candidate" || video.candidate_user_id !== user.id) return res.status(403).json({ error: "Candidate upload access required" });
       assertRoomParticipant(room, user.id, "candidate");
@@ -1363,7 +1364,7 @@ app.post("/api/candidate-videos/:videoId/approve", async (req, res) => {
       .eq("id", videoId)
       .single();
     if (error) throw error;
-    const room = getRoomForCandidateVideoAction(video, user.id);
+    const room = getRoomForCandidateVideoAction(video);
     assertRoomParticipant(room, user.id, "hr");
     if (video.status !== "enr") return res.status(409).json({ error: "Only pending videos can be approved" });
 
@@ -1402,7 +1403,7 @@ app.post("/api/candidate-videos/:videoId/dismiss", async (req, res) => {
       .eq("id", videoId)
       .single();
     if (error) throw error;
-    const room = getRoomForCandidateVideoAction(video, user.id);
+    const room = getRoomForCandidateVideoAction(video);
     assertRoomParticipant(room, user.id, "hr");
     if (video.status !== "enr") return res.status(409).json({ error: "Only pending videos can be dismissed" });
 
