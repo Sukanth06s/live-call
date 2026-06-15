@@ -367,11 +367,11 @@ export default function RoomPage({
         {hrRecovery?.isRecovering && (
           <motion.div
             key="hr-recovery-banner"
-            initial={{ y: -80, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: -80, opacity: 0 }}
+            initial={{ y: -100, opacity: 0, x: "-50%" }}
+            animate={{ y: 0, opacity: 1, x: "-50%" }}
+            exit={{ y: -100, opacity: 0, x: "-50%" }}
             transition={{ type: "spring", stiffness: 400, damping: 32 }}
-            className="fixed inset-x-0 top-0 z-50 flex items-center justify-between gap-4 bg-amber-500/95 px-4 py-3 shadow-2xl shadow-amber-900/40 backdrop-blur-sm"
+            className="fixed left-1/2 top-6 z-[100] flex w-[90%] max-w-3xl items-center justify-between gap-4 rounded-2xl border border-amber-500/30 bg-amber-500/95 px-5 py-4 shadow-[0_10px_40px_-10px_rgba(217,119,6,0.5)] backdrop-blur-md sm:w-auto sm:min-w-[500px]"
           >
             <div className="flex items-center gap-3 text-sm font-semibold text-amber-950">
               <span className="relative flex h-2.5 w-2.5 shrink-0">

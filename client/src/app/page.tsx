@@ -255,7 +255,6 @@ export default function Home() {
       setUserName("");
       roomIdRef.current = "";
       await leaveChannel();
-      socketLeaveRoom();
       await supabase.auth.signOut({ scope: "local" });
       router.replace("/login");
     };
