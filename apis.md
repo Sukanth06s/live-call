@@ -670,3 +670,43 @@ Events:
 - `Transcript`
 - `Close`
 - `Error`
+
+## 7. Candidate Videos REST API
+
+The Candidate Videos REST API provides signed upload/playback URLs and manages verification states for WebRTC recordings and user uploads.
+
+### GET /api/candidate-videos/state
+
+Retrieves the current state of candidate videos for the provided active `roomId`.
+
+**Request:**
+`GET /api/candidate-videos/state?roomId=<roomId>`
+`Authorization: Bearer <token>`
+
+**Response:**
+Returns `CandidateVideoState` containing `currentVideo`, `blockingVideo`, `uploadAllowed`, etc.
+
+### POST /api/candidate-videos/init-upload
+
+Initializes a direct-to-Supabase upload for a candidate, returning a signed upload URL.
+
+### POST /api/candidate-videos/hr-recording/init-upload
+
+Initializes a direct-to-Supabase upload for an HR recording, returning a signed upload URL.
+
+### POST /api/candidate-videos/:videoId/cancel-upload
+
+Resets an `uploading` or `enr` candidate video. 
+*Note:* Resolves the room via `getRoomByCandidateId` to support actions even if the original session disconnected or HR shifted.
+
+### POST /api/candidate-videos/:videoId/complete-upload
+
+Transitions an `uploading` video to `enr` (Evaluation Not Requested / Pending Review).
+
+### POST /api/candidate-videos/:videoId/approve
+
+Approves a candidate verification video, transitioning its status to `anr` (Approved).
+
+### POST /api/candidate-videos/:videoId/dismiss
+
+Rejects a candidate video, transitioning its status to `dismissed`.

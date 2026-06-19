@@ -204,7 +204,7 @@ Frontend response:
 sessionStorage.removeItem("intendedRole");
 sessionStorage.setItem("authNotice", message);
 await leaveChannel();
-socketLeaveRoom();
+// socketLeaveRoom() is intentionally OMITTED here
 await supabase.auth.signOut({ scope: "local" });
 router.replace("/login");
 ```
@@ -213,6 +213,7 @@ Syntax choice:
 
 - `scope: "local"` logs out only the old browser/device.
 - It does not revoke the newly logged-in device.
+- `socketLeaveRoom()` is explicitly avoided here so that the server's `disconnect` handler sees the drop as unintentional, correctly triggering the `hr_recovering` 15-second grace period instead of permanently ending the interview.
 
 ## 10. Lobby Component
 
