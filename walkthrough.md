@@ -289,13 +289,16 @@ Normal leave:
 4. Server removes socket from room.
 5. If room is empty, room is deleted.
 
-HR disconnect:
+HR disconnect (HR Fallback Policy):
+
+If an HR intentionally clicks "End Interview", the room is immediately closed. However, if they drop off unintentionally (e.g. forced logout by another device, tab closed, network crash), the backend triggers a fallback recovery:
 
 1. Server puts the room in `hr_recovering` state.
-2. A 15-second timer starts. Candidate UI shows "Waiting for Interviewer".
-3. Any HR with the same language can see the recovering room in their dashboard and join to rescue it.
-4. If the timer expires, the server closes the room.
-5. Remaining sockets receive:
+2. A 15-second timer starts. Candidate UI shows a floating "Waiting for Interviewer" pill.
+3. Any HR with the same language can see the recovering room in their dashboard (it surfaces to the top) and click "Join Session" to rescue it.
+4. If the SAME HR or a NEW HR joins, the timer is cleared and the session resumes seamlessly.
+5. If the timer expires, the server closes the room permanently.
+6. Remaining sockets receive:
 
 ```txt
 room-closed "The Interviewer (HR) has disconnected..."

@@ -217,7 +217,9 @@ Room shape:
   state, // "waiting" | "active" | "hr_recovering" | "transcribing" | "paused" | "ended"
   candidateUser,
   hrUser,
-  hiddenObservers,
+  lastCandidateUser, // Persists participant info even if they temporarily drop
+  lastHrUser,        // Persists participant info even if they temporarily drop
+  hiddenObservers,   // socketId -> RoomUser
   activeTranscriptionSession,
   blocks,
   activeSpeakers,
@@ -232,6 +234,12 @@ Why in-memory:
 - Live rooms are ephemeral.
 - Room updates are frequent.
 - The current app is designed for a single backend instance.
+
+Memory Deletion Policy:
+
+- Auto-delete on empty is INTENTIONALLY disabled in `leaveRoom()`.
+- Callers (API/Socket event handlers) are strictly responsible for calling `deleteRoom()` manually.
+- This is required so that `hr_recovering` rooms survive the 15-second grace period even when `hrUser` temporarily becomes `null`.
 
 Scaling note:
 
@@ -443,22 +451,27 @@ Backend:
 - Inserts `transcript_blocks`.
 - Emits `interview-ended`.
 
-## 19. HR Disconnect Behavior
+## 19. HR Disconnect Behavior (HR Fallback Policy)
 
-If HR disconnects:
+If HR disconnects unintentionally (e.g., closed tab, network drop, or forced logout from signing in on another device):
 
 1. Room enters `hr_recovering` state.
 2. A 15-second grace period countdown begins.
-3. Candidate UI shows a "Waiting for Interviewer" banner.
-4. Any HR matching the language can see the recovering room in their dashboard and join to rescue it.
-5. If rescued, the session continues seamlessly.
-6. If the 15-second timer expires with no HR rescue, the room is torn down: remaining sockets receive `room-closed`, final transcript is persisted, Deepgram closes, and the room is deleted.
+3. Candidate UI displays a floating "Waiting for Interviewer" pill.
+4. Any HR matching the language can see the recovering room in their lobby dashboard and join to rescue it.
+5. If the same HR (or a new HR) joins during this window, `cancelHrRecovery()` fires, the timer is cleared, and the session resumes seamlessly.
+6. If the 15-second timer expires with no HR rescue, the room is completely torn down: remaining sockets receive `room-closed`, the final transcript is persisted, Deepgram is closed, and the room is deleted.
+
+**API Fallback Resilience:**
+During the `hr_recovering` state, or right after a new HR rescues the room, REST API calls (like resetting a candidate video) might fire while the room's participant slots are in flux. 
+To prevent `403 Access Denied` errors, the backend utilizes `getRoomByCandidateId()` for Candidate Video actions. This searches both `room.candidateUser` and `room.lastCandidateUser`, ensuring the API successfully maps the video to the active room regardless of whether the Candidate briefly dropped or the assigned HR shifted during a recovery.
 
 Reason:
 
 - Real-world networks drop connections.
 - Candidates should not lose their entire interview session because the HR's internet flickered for 5 seconds.
 - Disconnected HRs (or backup HRs) have 15 seconds to resume the interview.
+- Forced logouts trigger this exact same fallback because the frontend intentionally avoids emitting a `leave-room` socket event, making the server treat it as an accidental drop.
 
 ## 20. Error Handling
 

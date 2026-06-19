@@ -49,7 +49,7 @@ The client requests a token after Socket.IO room join succeeds.
 Request:
 
 ```txt
-GET /api/token?channelName=<roomId>&uid=<socketId>
+GET /api/token?channelName=<roomId>
 Authorization: Bearer <supabase_access_token>
 ```
 
@@ -60,7 +60,9 @@ const rtcRole = authorizedRole === "super_admin"
   ? RtcRole.SUBSCRIBER
   : RtcRole.PUBLISHER;
 
-const agoraToken = RtcTokenBuilder.buildTokenWithAccount(
+const uid = createAgoraUid(user.id, channelName, authorizedRole);
+
+const agoraToken = RtcTokenBuilder.buildTokenWithUid(
   appId,
   appCertificate,
   channelName,
@@ -72,31 +74,32 @@ const agoraToken = RtcTokenBuilder.buildTokenWithAccount(
 
 Syntax choice:
 
-- `buildTokenWithAccount` is used instead of numeric uid token generation because Socket.IO ids are strings.
+- Agora strictly requires `uid` to be a 32-bit unsigned integer. We generate a stable integer by hashing `${userId}:${roomId}:${role}` using `crypto.createHash`.
+- `buildTokenWithUid` is used instead of string accounts.
 - Token lifetime is one hour.
 - Role is selected server-side from Supabase profile, not from the browser.
 
 ## 4. Agora UID Strategy
 
-LiveRoom uses the Socket.IO socket id as the Agora uid.
+LiveRoom uses the deterministic `createAgoraUid` integer hash for the Agora `uid`.
 
 Example:
 
 ```ts
-await joinChannel(newRoomId, agoraToken, socketId, resolvedRole);
+await joinChannel(newRoomId, agoraToken, agoraUid, resolvedRole);
 ```
 
 Then:
 
 ```ts
-await client.join(APP_ID, channelName, token || null, uid || null);
+await client.join(APP_ID, channelName, token || null, uid);
 ```
 
 Reason:
 
-- Room state users are identified by `socket.id`.
-- Agora remote users are identified by `user.uid`.
-- If both use the same id, the UI can match video tracks to the correct participant.
+- Agora requires numbers.
+- By deriving it deterministically from the Supabase User ID, Room ID, and Role, the UID is stable even if the user reconnects (which assigns them a new Socket.IO ID).
+- The frontend receives `agoraUid` via the Socket.IO `room-state` event, allowing it to seamlessly match incoming Agora video/audio tracks to the correct participant object.
 
 This fixed the camera inconsistency where:
 

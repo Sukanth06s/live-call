@@ -96,11 +96,14 @@ A room stores:
   state,
   candidateUser,
   hrUser,
+  lastCandidateUser,
+  lastHrUser,
   hiddenObservers,
   activeTranscriptionSession,
   blocks,
   activeSpeakers,
   roomStateVersion,
+  hrRecovery,
   createdAt
 }
 ```
@@ -113,6 +116,11 @@ Do not create a new interview every time a socket reconnects.
 ```
 
 As long as the room still exists, reconnects reuse the same `interviewSessionId`. After the room is ended/destroyed, a future meeting creates a new interview session, even if it is the same candidate and same HR.
+
+Memory Deletion:
+
+- `leaveRoom()` intentionally does **not** auto-delete the room when it empties.
+- The server specifically delays deletion and leaves it to explicit manual triggers (like the HR 15-second timer expiration, or HR explicitly ending the call). This protects the `hr_recovering` state and API mappings relying on `lastCandidateUser`.
 
 ## 4. Interview Lifecycle
 
