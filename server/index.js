@@ -61,6 +61,8 @@ const speakerTimeouts = new Map();
 const activeDeepgramConnections = new Map(); // roomId -> { dgConnection, isDeepgramConnecting, isDgOpen, audioQueue }
 const transcriptionCountdowns = new Map(); // roomId -> countdown interval
 const hrRecoveryTimers = new Map(); // roomId → { timerId, tickId } — cancellable HR-disconnect recovery
+const candidateRecoveryTimers = new Map(); // roomId → { timerId, tickId }
+const abandonedRecoveryTimers = new Map(); // roomId → { timerId }
 const allowedRoles = new Set(["candidate", "hr", "super_admin"]);
 const activeUserSockets = new Map(); // Supabase auth user id -> active socket id
 const candidateVideoBucket = "candidate-videos";
@@ -628,12 +630,14 @@ function enterHrRecoveryMode(roomId, hrSocket) {
   room.hrRecovery.isRecovering = true;
   room.hrRecovery.disconnectedAt = now;
   room.hrRecovery.deadline = now + RECOVERY_MS;
-  room.hrRecovery.disconnectedHrAuthUserId = hrSocket.data.userId;
-  room.hrRecovery.disconnectedHrName = hrSocket.data.displayName || hrSocket.data.userName || "HR";
+  room.hrRecovery.disconnectedHrAuthUserId = hrSocket?.data?.userId || null;
+  room.hrRecovery.disconnectedHrName = hrSocket?.data?.displayName || hrSocket?.data?.userName || "HR";
 
   // Remove HR from active slot but keep room alive
-  leaveRoom(roomId, hrSocket.id);
-  hrSocket.leave(roomId);
+  if (hrSocket?.id && hrSocket?.leave) {
+    leaveRoom(roomId, hrSocket.id);
+    hrSocket.leave(roomId);
+  }
 
   // Stop any live transcription so Deepgram doesn't leak
   if (room.activeTranscriptionSession?.isActive || transcriptionCountdowns.has(roomId)) {
@@ -705,6 +709,135 @@ function cancelHrRecovery(roomId) {
     // Keep disconnectedHrName for audit — cleared separately if needed
   }
   console.log(`[Recovery] HR recovery cancelled for room ${roomId}.`);
+}
+
+function enterCandidateRecoveryMode(roomId, candidateSocket) {
+  const room = getRoom(roomId);
+  if (!room) return;
+  const now = Date.now();
+  const RECOVERY_MS = 60_000;
+  room.state = "candidate_recovering";
+  room.candidateRecovery.isRecovering = true;
+  room.candidateRecovery.disconnectedAt = now;
+  room.candidateRecovery.deadline = now + RECOVERY_MS;
+  room.candidateRecovery.disconnectedCandidateAuthUserId = candidateSocket?.data?.userId || null;
+  room.candidateRecovery.disconnectedCandidateName = candidateSocket?.data?.displayName || candidateSocket?.data?.userName || "Candidate";
+
+  if (candidateSocket?.id && candidateSocket?.leave) {
+    leaveRoom(roomId, candidateSocket.id);
+    candidateSocket.leave(roomId);
+  }
+
+  if (room.activeTranscriptionSession?.isActive || transcriptionCountdowns.has(roomId)) {
+    stopTranscriptionForRoom(roomId, { emitStopped: false });
+    room.state = "candidate_recovering";
+  }
+
+  io.to(roomId).emit("candidate-recovering", {
+    message: "Candidate has disconnected. Waiting for them to reconnect...",
+    deadline: room.candidateRecovery.deadline,
+    remainingMs: RECOVERY_MS,
+  });
+
+  const tickId = setInterval(() => {
+    const fresh = getRoom(roomId);
+    if (!fresh || !fresh.candidateRecovery.isRecovering) return;
+    const remaining = Math.max(0, fresh.candidateRecovery.deadline - Date.now());
+    io.to(roomId).emit("candidate-recovering", {
+      message: "Candidate has disconnected. Waiting for them to reconnect...",
+      deadline: fresh.candidateRecovery.deadline,
+      remainingMs: remaining,
+    });
+  }, 5000);
+
+  const timerId = setTimeout(() => {
+    clearInterval(tickId);
+    candidateRecoveryTimers.delete(roomId);
+    const fresh = getRoom(roomId);
+    if (fresh) {
+      fresh.candidateRecovery.isRecovering = false;
+      io.to(roomId).emit("candidate-recovery-timeout");
+      console.log(`[Recovery] Candidate recovery timeout for room ${roomId}. Prompting HR for decision.`);
+    }
+  }, RECOVERY_MS);
+
+  candidateRecoveryTimers.set(roomId, { timerId, tickId });
+  console.log(`[Recovery] Room ${roomId} entered candidate_recovering. 60s window open.`);
+}
+
+function cancelCandidateRecovery(roomId) {
+  const recovery = candidateRecoveryTimers.get(roomId);
+  if (recovery) {
+    clearTimeout(recovery.timerId);
+    clearInterval(recovery.tickId);
+    candidateRecoveryTimers.delete(roomId);
+  }
+  const room = getRoom(roomId);
+  if (room) {
+    room.state = "active";
+    room.candidateRecovery.isRecovering = false;
+    room.candidateRecovery.disconnectedAt = null;
+    room.candidateRecovery.deadline = null;
+    room.candidateRecovery.disconnectedCandidateAuthUserId = null;
+  }
+  console.log(`[Recovery] Candidate recovery cancelled for room ${roomId}.`);
+}
+
+function enterAbandonedMode(roomId) {
+  const room = getRoom(roomId);
+  if (!room) return;
+  const now = Date.now();
+  const RECOVERY_MS = 5_000;
+  room.state = "abandoned";
+  room.priority = "critical";
+  room.abandonedRecovery.isAbandoned = true;
+  room.abandonedRecovery.abandonedAt = now;
+  room.abandonedRecovery.deadline = now + RECOVERY_MS;
+
+  if (room.activeTranscriptionSession?.isActive || transcriptionCountdowns.has(roomId)) {
+    stopTranscriptionForRoom(roomId, { emitStopped: false });
+    room.state = "abandoned";
+  }
+
+  // Cancel any existing HR or Candidate recovery timers because the room is completely empty
+  const hrRec = hrRecoveryTimers.get(roomId);
+  if (hrRec) {
+    clearTimeout(hrRec.timerId);
+    clearInterval(hrRec.tickId);
+    hrRecoveryTimers.delete(roomId);
+  }
+  const candRec = candidateRecoveryTimers.get(roomId);
+  if (candRec) {
+    clearTimeout(candRec.timerId);
+    clearInterval(candRec.tickId);
+    candidateRecoveryTimers.delete(roomId);
+  }
+
+  const timerId = setTimeout(async () => {
+    abandonedRecoveryTimers.delete(roomId);
+    console.log(`[Recovery] Abandoned timeout popped for room ${roomId}. Teardown initiated.`);
+    // Create a dummy socket-like object to pass to executeFinalTeardown if needed
+    const dummySocket = { data: { role: "system" } };
+    await executeFinalTeardown(roomId, dummySocket, { reason: "abandoned", intentional: false });
+  }, RECOVERY_MS);
+
+  abandonedRecoveryTimers.set(roomId, { timerId });
+  console.log(`[Recovery] Room ${roomId} is abandoned. 5s window open.`);
+}
+
+function cancelAbandonedMode(roomId) {
+  const recovery = abandonedRecoveryTimers.get(roomId);
+  if (recovery) {
+    clearTimeout(recovery.timerId);
+    abandonedRecoveryTimers.delete(roomId);
+  }
+  const room = getRoom(roomId);
+  if (room) {
+    room.abandonedRecovery.isAbandoned = false;
+    room.abandonedRecovery.abandonedAt = null;
+    room.abandonedRecovery.deadline = null;
+  }
+  console.log(`[Recovery] Abandoned mode cancelled for room ${roomId}.`);
 }
 
 /**
@@ -1613,7 +1746,20 @@ io.on("connection", (socket) => {
     joinRoom(roomId, socket.id, durableName, socket.data.userId, requestedRole, socket.data.agoraUid);
     socket.join(roomId);
 
-    // If HR joins a recovering room — any HR can rescue — cancel the timer and notify
+    // ── RECOVERY CANCELLATION ──
+    if (abandonedRecoveryTimers.has(roomId)) {
+      cancelAbandonedMode(roomId);
+      io.to(roomId).emit("room-recovered", { message: `${durableName} has joined the room.` });
+      console.log(`[Recovery] ${durableName} rescued abandoned room ${roomId}.`);
+      
+      const freshRoom = getRoom(roomId);
+      if (requestedRole === "candidate" && !freshRoom.hrUser) {
+        enterHrRecoveryMode(roomId, null);
+      } else if (requestedRole === "hr" && !freshRoom.candidateUser) {
+        enterCandidateRecoveryMode(roomId, null);
+      }
+    }
+
     if (requestedRole === "hr" && isRecoveringRoom) {
       const prevHrName = room.hrRecovery?.disconnectedHrName || "the previous interviewer";
       cancelHrRecovery(roomId);
@@ -1624,13 +1770,22 @@ io.on("connection", (socket) => {
       });
       console.log(`[Recovery] ${durableName} rescued room ${roomId} (prev HR: ${prevHrName}).`);
     } else if (requestedRole === "hr" && hrRecoveryTimers.has(roomId)) {
-      // Fallback: original HR reconnected while timer running
       cancelHrRecovery(roomId);
       io.to(roomId).emit("hr-rejoined", {
         message: "Your interviewer has reconnected. The session continues.",
         hrName: durableName,
       });
     }
+
+    if (requestedRole === "candidate" && candidateRecoveryTimers.has(roomId)) {
+      cancelCandidateRecovery(roomId);
+      io.to(roomId).emit("candidate-rejoined", {
+        message: "The candidate has reconnected.",
+        candidateName: durableName,
+      });
+      console.log(`[Recovery] ${durableName} candidate rescued room ${roomId}.`);
+    }
+
 
     if (requestedRole === "hr") {
       try {
@@ -1726,6 +1881,28 @@ io.on("connection", (socket) => {
       }
     }, 1000);
     transcriptionCountdowns.set(roomId, interval);
+  });
+
+  socket.on("hr-keep-waiting", ({ roomId }) => {
+    if (!isSocketInRoom(socket, roomId)) return;
+    if (socket.data.role !== "hr" && socket.data.role !== "super_admin") return;
+    const room = getRoom(roomId);
+    if (!room) return;
+    room.state = "waiting_for_candidate";
+    broadcastProjectedRoomState(roomId);
+  });
+
+  socket.on("hr-end-interview", async ({ roomId }) => {
+    if (!isSocketInRoom(socket, roomId)) return;
+    if (socket.data.role !== "hr" && socket.data.role !== "super_admin") return;
+    const room = getRoom(roomId);
+    if (!room) return;
+    
+    socket.data.intentionalLeave = true;
+    if (room.activeTranscriptionSession?.isActive || transcriptionCountdowns.has(roomId)) {
+      stopTranscriptionForRoom(roomId, { emitStopped: false });
+    }
+    await executeFinalTeardown(roomId, socket, { reason: "hr-ended", intentional: true });
   });
 
   socket.on("end-interview", async ({ roomId }) => {
@@ -2014,61 +2191,98 @@ function handleLeave(socket) {
     return;
   }
 
-  // ── HR LEAVE ─────────────────────────────────────────────────────────────
-  if (role === "hr") {
-    const isActiveHrSocket = room?.hrUser?.id === socket.id;
-
-    if (!room || !isActiveHrSocket) {
-      // Stale / already-replaced HR socket — remove silently
-      if (room) {
-        leaveRoom(roomId, socket.id);
-        broadcastProjectedRoomState(roomId);
-      }
-      socket.leave(roomId);
-      return;
-    }
-
-    // Don't double-arm a recovery timer
-    if (hrRecoveryTimers.has(roomId)) {
-      socket.leave(roomId);
-      return;
-    }
-
-    if (socket.data.intentionalLeave) {
-      // Intentional leave (End Interview button or Leave Room button)
-      // executeFinalTeardown is already called by end-interview handler;
-      // for leave-room we call it here.
-      void executeFinalTeardown(roomId, socket, { reason: "hr-ended", intentional: true });
-    } else {
-      // Unexpected disconnect (crash, network loss, browser close without leave-room)
-      // Enter recovery mode: room survives, any HR can rescue within 15s
-      enterHrRecoveryMode(roomId, socket);
-    }
-    return;
-  }
-
-  // ── CANDIDATE / SUPER ADMIN LEAVE ────────────────────────────────────────
   if (!room) {
     socket.leave(roomId);
     return;
   }
 
-  if (role === "candidate" && (room.activeTranscriptionSession?.isActive || transcriptionCountdowns.has(roomId))) {
-    stopTranscriptionForRoom(roomId, { emitStopped: true });
+  // ── HR LEAVE ─────────────────────────────────────────────────────────────
+  if (role === "hr") {
+    const isActiveHrSocket = room.hrUser?.id === socket.id;
+
+    if (!isActiveHrSocket) {
+      leaveRoom(roomId, socket.id);
+      socket.leave(roomId);
+      broadcastProjectedRoomState(roomId);
+      return;
+    }
+
+    if (hrRecoveryTimers.has(roomId) || abandonedRecoveryTimers.has(roomId)) {
+      socket.leave(roomId);
+      return;
+    }
+
+    if (socket.data.intentionalLeave) {
+      void executeFinalTeardown(roomId, socket, { reason: "hr-ended", intentional: true });
+    } else {
+      // It's an unexpected HR disconnect. If candidate is absent, room is abandoned.
+      if (!room.candidateUser) {
+        leaveRoom(roomId, socket.id);
+        socket.leave(roomId);
+        enterAbandonedMode(roomId);
+      } else {
+        enterHrRecoveryMode(roomId, socket);
+      }
+    }
+    return;
   }
 
-  finalizeAllActiveSpeakers(roomId);
-  leaveRoom(roomId, socket.id);
-  socket.leave(roomId);
+  // ── CANDIDATE LEAVE ────────────────────────────────────────
+  if (role === "candidate") {
+    const isActiveCandidateSocket = room.candidateUser?.id === socket.id;
+
+    if (!isActiveCandidateSocket) {
+      leaveRoom(roomId, socket.id);
+      socket.leave(roomId);
+      broadcastProjectedRoomState(roomId);
+      return;
+    }
+
+    if (candidateRecoveryTimers.has(roomId) || abandonedRecoveryTimers.has(roomId)) {
+      socket.leave(roomId);
+      return;
+    }
+
+    if (socket.data.intentionalLeave) {
+      if (room.activeTranscriptionSession?.isActive || transcriptionCountdowns.has(roomId)) {
+        stopTranscriptionForRoom(roomId, { emitStopped: true });
+      }
+      finalizeAllActiveSpeakers(roomId);
+      leaveRoom(roomId, socket.id);
+      socket.leave(roomId);
+      broadcastProjectedRoomState(roomId);
+    } else {
+      // It's an unexpected Candidate disconnect. If HR is absent, room is abandoned.
+      if (!room.hrUser) {
+        leaveRoom(roomId, socket.id);
+        socket.leave(roomId);
+        enterAbandonedMode(roomId);
+      } else {
+        enterCandidateRecoveryMode(roomId, socket);
+      }
+    }
+    return;
+  }
+
+  // ── SUPER ADMIN LEAVE ────────────────────────────────────────
+  if (role === "super_admin") {
+    leaveRoom(roomId, socket.id);
+    socket.leave(roomId);
+  }
 
   // Only auto-delete if room is truly empty AND not in recovery
   const fresh = getRoom(roomId);
-  if (fresh && !fresh.candidateUser && !fresh.hrUser && fresh.hiddenObservers.size === 0 && !hrRecoveryTimers.has(roomId)) {
-    clearCountdown(roomId);
-    closeDeepgramForRoom(roomId);
-    clearSpeakerTimeouts(roomId);
-    deleteRoom(roomId);
-  } else if (fresh) {
+  if (fresh && !fresh.candidateUser && !fresh.hrUser && fresh.hiddenObservers.size === 0) {
+    if (!hrRecoveryTimers.has(roomId) && !candidateRecoveryTimers.has(roomId) && !abandonedRecoveryTimers.has(roomId)) {
+      clearCountdown(roomId);
+      closeDeepgramForRoom(roomId);
+      clearSpeakerTimeouts(roomId);
+      deleteRoom(roomId);
+      return;
+    }
+  }
+  
+  if (fresh) {
     broadcastProjectedRoomState(roomId);
   }
 }

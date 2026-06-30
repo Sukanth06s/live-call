@@ -456,6 +456,7 @@ export default function Home() {
       isTranscriptionChanging={isTranscriptionChanging}
       transcriptionCountdown={transcriptionCountdown}
       hrRecovery={hrRecovery}
+      candidateRecovery={candidateRecovery}
       onToggleMute={handleToggleMute}
       onToggleVideo={handleToggleVideo}
       onLeaveRoom={handleLeaveRoom}

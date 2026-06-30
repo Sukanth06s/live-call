@@ -49,6 +49,13 @@ interface RoomPageProps {
     remainingMs: number;
     deadline: number;
   } | null;
+  candidateRecovery?: {
+    isRecovering: boolean;
+    message: string;
+    remainingMs: number;
+    deadline: number;
+    isTimeout: boolean;
+  } | null;
   onToggleMute: () => void;
   onToggleVideo: () => void;
   onLeaveRoom: () => void;
@@ -90,6 +97,7 @@ export default function RoomPage({
   isTranscriptionChanging = false,
   transcriptionCountdown = null,
   hrRecovery = null,
+  candidateRecovery = null,
   onToggleMute,
   onToggleVideo,
   onLeaveRoom,
@@ -133,6 +141,19 @@ export default function RoomPage({
       onLeaveRoom();
     }
   }, [candidateInRoom, onLeaveRoom]);
+
+  const handleKeepWaiting = useCallback(() => {
+    if (socket) {
+      socket.emit("hr-keep-waiting", { roomId });
+    }
+  }, [socket, roomId]);
+
+  const handleEndInterviewTimeout = useCallback(() => {
+    if (socket) {
+      socket.emit("hr-end-interview", { roomId });
+    }
+  }, [socket, roomId]);
+
   const visibleRemoteRoomUsers = users.filter((u) => {
     if (u.id === currentUserId) return false;
     return u.role === "candidate" || u.role === "hr";
@@ -454,8 +475,74 @@ export default function RoomPage({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.15 }}
         className="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-hidden"
-      >
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:flex lg:flex-col lg:overflow-y-auto">
+<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:flex lg:flex-col lg:overflow-y-auto">
+          {/* Candidate Recovery Active Banner (HR Side) */}
+          <AnimatePresence>
+            {isHr && candidateRecovery?.isRecovering && !candidateRecovery.isTimeout && (
+              <motion.div
+                initial={{ y: -50, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: -50, opacity: 0 }}
+                className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full 
+                         bg-yellow-500/20 border border-yellow-500/30 backdrop-blur-md shadow-2xl
+                         flex items-center gap-3"
+              >
+                <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
+                <div className="flex flex-col">
+                  <span className="text-yellow-200 text-sm font-medium">{candidateRecovery.message}</span>
+                  <span className="text-yellow-400/80 text-xs text-center font-mono mt-0.5">
+                    {Math.ceil(candidateRecovery.remainingMs / 1000)}s
+                  </span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Candidate Recovery Timeout Modal (HR Side) */}
+          <AnimatePresence>
+            {isHr && candidateRecovery?.isTimeout && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+              >
+                <motion.div
+                  initial={{ scale: 0.95, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.95, opacity: 0 }}
+                  className="bg-[#0f0f13] border border-white/10 rounded-2xl p-6 max-w-sm w-full shadow-2xl"
+                >
+                  <div className="w-12 h-12 rounded-full bg-yellow-500/10 flex items-center justify-center mb-4 border border-yellow-500/20">
+                    <svg className="w-6 h-6 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-semibold text-white mb-2">Candidate Disconnected</h3>
+                  <p className="text-white/60 text-sm mb-6 leading-relaxed">
+                    The candidate has not reconnected within 60 seconds. Would you like to keep waiting or end the interview now?
+                  </p>
+                  <div className="flex flex-col gap-3">
+                    <button
+                      onClick={handleKeepWaiting}
+                      className="w-full px-4 py-2.5 bg-white text-black text-sm font-semibold rounded-xl hover:bg-white/90 transition-colors"
+                    >
+                      Keep Waiting
+                    </button>
+                    <button
+                      onClick={handleEndInterviewTimeout}
+                      className="w-full px-4 py-2.5 bg-red-500/10 text-red-500 text-sm font-semibold rounded-xl hover:bg-red-500/20 border border-red-500/20 transition-colors"
+                    >
+                      End Interview
+                    </button>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="flex flex-col lg:flex-row h-full">
+            {/* LEFT COLUMN: Main Video & Participants */}
           <header className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/70 px-3 py-2.5 backdrop-blur-md sm:px-4 lg:hidden">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">

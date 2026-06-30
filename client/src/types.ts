@@ -3,7 +3,7 @@ export type BlockStatus = "live" | "finalizing" | "final" | "editing";
 export type UserRole = "candidate" | "hr" | "super_admin";
 export type RoomLanguage = "english" | "tamil" | "hindi";
 
-export type InterviewState = "waiting" | "active" | "transcribing" | "paused" | "hr_recovering" | "ending" | "ended";
+export type InterviewState = "waiting" | "active" | "transcribing" | "paused" | "hr_recovering" | "candidate_recovering" | "waiting_for_candidate" | "abandoned" | "ending" | "ended";
 export type CandidateVideoSource = "candidate_upload" | "hr_recording";
 export type CandidateVideoStatus = "uploading" | "enr" | "anr" | "archived";
 

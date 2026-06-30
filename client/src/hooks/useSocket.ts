@@ -34,6 +34,14 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     deadline: number;
   } | null>(null);
 
+  const [candidateRecovery, setCandidateRecovery] = useState<{
+    isRecovering: boolean;
+    message: string;
+    remainingMs: number;
+    deadline: number;
+    isTimeout: boolean;
+  } | null>(null);
+
   useEffect(() => {
     if (!sessionToken) return;
     if (sessionTokenRef.current !== sessionToken) {
@@ -162,6 +170,29 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       setHrRecovery(null);
     });
 
+    // Candidate Recovery events
+    socket.on("candidate-recovering", ({ message, remainingMs, deadline }: { message: string; remainingMs: number; deadline: number }) => {
+      console.log("[Socket] candidate-recovering:", message, remainingMs);
+      setCandidateRecovery({ isRecovering: true, message, remainingMs, deadline, isTimeout: false });
+    });
+
+    socket.on("candidate-recovery-timeout", () => {
+      console.log("[Socket] candidate-recovery-timeout");
+      setCandidateRecovery((prev) => prev ? { ...prev, isTimeout: true } : null);
+    });
+
+    socket.on("candidate-rejoined", ({ message }: { message: string }) => {
+      console.log("[Socket] candidate-rejoined:", message);
+      setCandidateRecovery(null);
+    });
+
+    // General recovery / abandon
+    socket.on("room-recovered", ({ message }: { message: string }) => {
+      console.log("[Socket] room-recovered:", message);
+      setCandidateRecovery(null);
+      setHrRecovery(null);
+    });
+
     // Legacy speaking indicators - room-state or block-update will handle visual speaking states
     socket.on("user-speaking", ({ userId, isSpeaking }: { userId: string; isSpeaking: boolean }) => {
       setUsers((prev) =>
@@ -274,6 +305,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       setIsTranscriptionChanging(false);
       setTranscriptionCountdown(null);
       setHrRecovery(null);
+      setCandidateRecovery(null);
       roomStateVersionRef.current = 0;
     }
   }, []);
@@ -315,6 +347,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     isTranscriptionChanging,
     transcriptionCountdown,
     hrRecovery,
+    candidateRecovery,
     joinRoom,
     createCandidateRoom,
     leaveRoom,

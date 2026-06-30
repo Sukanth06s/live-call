@@ -272,7 +272,8 @@ export default function Lobby({
                       {activeRooms.map((room) => {
                         const isLiveTranscribing = room.state === "transcribing";
                         const isRecovering = room.state === "hr_recovering";
-                        const canJoin = authorizedRole === "super_admin" || isRecovering || !room.isFull;
+                        const isAbandoned = room.state === "abandoned";
+                        const canJoin = authorizedRole === "super_admin" || isRecovering || isAbandoned || !room.isFull;
                         const remainingSecs = isRecovering && room.hrRecovery?.remainingMs != null
                           ? Math.max(0, Math.ceil(room.hrRecovery.remainingMs / 1000))
                           : null;
@@ -285,6 +286,8 @@ export default function Lobby({
                             className={`group relative flex min-h-[120px] flex-col justify-between overflow-hidden rounded-2xl border p-4 shadow-md transition-all duration-300 select-none sm:aspect-square ${
                               isRecovering
                                 ? "cursor-pointer border-red-500/30 bg-red-500/[0.04] hover:border-red-500/50 hover:bg-red-500/[0.07]"
+                                : isAbandoned
+                                ? "cursor-pointer border-yellow-500/30 bg-yellow-500/[0.04] hover:border-yellow-500/50 hover:bg-yellow-500/[0.07]"
                                 : canJoin
                                 ? "cursor-pointer border-white/[0.06] bg-white/[0.02] hover:border-indigo-500/30 hover:bg-indigo-500/[0.03]"
                                 : "cursor-not-allowed border-white/[0.06] bg-white/[0.02] opacity-75"
@@ -292,15 +295,15 @@ export default function Lobby({
                           >
                             {/* Inner ambient glow */}
                             <div className={`absolute -right-6 -bottom-6 w-16 h-16 rounded-full blur-xl opacity-20 transition-all ${
-                              isRecovering ? "bg-red-500" : isLiveTranscribing ? "bg-emerald-500" : "bg-blue-500"
+                              isRecovering ? "bg-red-500" : isAbandoned ? "bg-yellow-500" : isLiveTranscribing ? "bg-emerald-500" : "bg-blue-500"
                             }`} />
 
-                            {/* URGENT pulse dot for recovering rooms */}
-                            {isRecovering && (
+                            {/* Pulse dot for recovering/abandoned rooms */}
+                            {(isRecovering || isAbandoned) && (
                               <div className="absolute right-3 top-3">
                                 <span className="relative flex h-2.5 w-2.5">
-                                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-                                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                                  <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${isRecovering ? 'bg-red-400' : 'bg-yellow-400'}`} />
+                                  <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${isRecovering ? 'bg-red-500' : 'bg-yellow-500'}`} />
                                 </span>
                               </div>
                             )}
@@ -331,6 +334,8 @@ export default function Lobby({
                               <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
                                 isRecovering
                                   ? "bg-red-500/15 text-red-300 border border-red-500/30 animate-pulse"
+                                  : isAbandoned
+                                  ? "bg-yellow-500/15 text-yellow-300 border border-yellow-500/30 animate-pulse"
                                   : room.isFull
                                   ? "bg-amber-500/10 text-amber-300 border border-amber-500/20"
                                   : isLiveTranscribing
@@ -339,13 +344,15 @@ export default function Lobby({
                                   ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
                                   : "bg-gray-500/10 text-gray-400 border border-gray-500/20"
                               }`}>
-                                {isRecovering ? "Urgent" : room.isFull ? "Ongoing / Full" : isLiveTranscribing ? "Live" : "Waiting"}
+                                {isRecovering ? "Urgent" : isAbandoned ? "Waiting for Rejoin" : room.isFull ? "Ongoing / Full" : isLiveTranscribing ? "Live" : "Waiting"}
                               </span>
                               <span className={`text-[10px] font-bold flex items-center gap-1 transition-transform group-hover:translate-x-0.5 ${
-                                isRecovering ? "text-red-400" : "text-indigo-400"
+                                isRecovering ? "text-red-400" : isAbandoned ? "text-yellow-400" : "text-indigo-400"
                               }`}>
                                 {isRecovering
                                   ? remainingSecs !== null ? `${remainingSecs}s` : "Rescue"
+                                  : isAbandoned 
+                                  ? "Rescue"
                                   : authorizedRole === "super_admin" ? "Observe" : room.isFull ? "Full" : "Join Call"
                                 }
                                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>

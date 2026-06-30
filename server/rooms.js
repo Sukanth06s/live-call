@@ -14,7 +14,7 @@ function createRoom(roomId, language = "english") {
       roomId: roomId,
       language: normalizeLanguage(language),
       interviewSessionId: null, // Set when HR starts the interview
-      state: "waiting", // "waiting" | "active" | "transcribing" | "paused" | "hr_recovering" | "ending" | "ended"
+      state: "waiting", // "waiting" | "active" | "transcribing" | "paused" | "hr_recovering" | "candidate_recovering" | "waiting_for_candidate" | "abandoned" | "ending" | "ended"
 
       candidateUser: null,
       hrUser: null,
@@ -34,13 +34,24 @@ function createRoom(roomId, language = "english") {
       activeSpeakers: new Map(),  // userName -> { blockId, committedSegments, liveSegment }
       createdAt: Date.now(),
 
-      // HR recovery metadata
       hrRecovery: {
         isRecovering: false,
         disconnectedAt: null,       // timestamp ms
         deadline: null,             // timestamp ms (disconnectedAt + 15000)
         disconnectedHrAuthUserId: null,
         disconnectedHrName: null,
+      },
+      candidateRecovery: {
+        isRecovering: false,
+        disconnectedAt: null,
+        deadline: null,
+        disconnectedCandidateAuthUserId: null,
+        disconnectedCandidateName: null,
+      },
+      abandonedRecovery: {
+        isAbandoned: false,
+        abandonedAt: null,
+        deadline: null,
       },
       priority: "normal",           // "normal" | "critical"
     });
@@ -142,20 +153,23 @@ function getRoomsForRole(role, language = null) {
   return getAllRooms()
     .filter((room) => {
       if (role === "hr") {
-        const matchesLanguage = room.language === normalizedLanguage;
-        // Show waiting rooms, recovering rooms, AND full ongoing rooms (any room with a candidate)
-        return matchesLanguage && Boolean(room.candidateName);
+        // Show waiting rooms, recovering rooms, abandoned rooms, AND full ongoing rooms
+        // We use Boolean(room.candidateName) to include pure waiting rooms where HR is null.
+        if (room.language !== normalizedLanguage) return false;
+        return Boolean(room.candidateName) || room.state === "abandoned";
       }
       if (role === "super_admin") {
-        // Full rooms OR rooms in HR recovery mode
-        return room.isFull || room.state === "hr_recovering";
+        // Full rooms OR rooms in HR recovery mode or abandoned
+        return room.isFull || room.state === "hr_recovering" || room.state === "abandoned";
       }
       return false;
     })
     .sort((a, b) => {
-      // Critical (hr_recovering) rooms surface first
-      if (a.priority === "critical" && b.priority !== "critical") return -1;
-      if (b.priority === "critical" && a.priority !== "critical") return 1;
+      // Critical (hr_recovering / abandoned) rooms surface first
+      if (a.state === "hr_recovering" && b.state !== "hr_recovering") return -1;
+      if (a.state !== "hr_recovering" && b.state === "hr_recovering") return 1;
+      if (a.state === "abandoned" && b.state !== "abandoned") return -1;
+      if (a.state !== "abandoned" && b.state === "abandoned") return 1;
       return a.createdAt - b.createdAt;
     });
 }
