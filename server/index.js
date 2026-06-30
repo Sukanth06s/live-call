@@ -646,6 +646,8 @@ function enterHrRecoveryMode(roomId, hrSocket) {
     room.state = "hr_recovering";
   }
 
+  broadcastProjectedRoomState(roomId);
+
   // Notify candidate (and super admins still in the room)
   io.to(roomId).emit("hr-recovering", {
     message: "Your interviewer has disconnected. Please wait — we're finding an interviewer for you.",
@@ -733,6 +735,8 @@ function enterCandidateRecoveryMode(roomId, candidateSocket) {
     room.state = "candidate_recovering";
   }
 
+  broadcastProjectedRoomState(roomId);
+
   io.to(roomId).emit("candidate-recovering", {
     message: "Candidate has disconnected. Waiting for them to reconnect...",
     deadline: room.candidateRecovery.deadline,
@@ -812,6 +816,8 @@ function enterAbandonedMode(roomId) {
     clearInterval(candRec.tickId);
     candidateRecoveryTimers.delete(roomId);
   }
+
+  broadcastProjectedRoomState(roomId);
 
   const timerId = setTimeout(async () => {
     abandonedRecoveryTimers.delete(roomId);

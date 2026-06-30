@@ -93,6 +93,7 @@ export default function Home() {
     isTranscriptionChanging,
     transcriptionCountdown,
     hrRecovery,
+    candidateRecovery,
     joinRoom,
     createCandidateRoom,
     leaveRoom: socketLeaveRoom,
