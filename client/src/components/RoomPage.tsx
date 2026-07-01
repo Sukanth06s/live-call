@@ -475,7 +475,8 @@ export default function RoomPage({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.15 }}
         className="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-hidden"
-<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:flex lg:flex-col lg:overflow-y-auto">
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:flex lg:flex-col lg:overflow-y-auto">
           {/* Candidate Recovery Active Banner (HR Side) */}
           <AnimatePresence>
             {isHr && candidateRecovery?.isRecovering && !candidateRecovery.isTimeout && (
