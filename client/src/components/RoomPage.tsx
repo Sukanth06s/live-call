@@ -112,6 +112,27 @@ export default function RoomPage({
   roomState,
 }: RoomPageProps) {
   const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [recoveryCountdown, setRecoveryCountdown] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (candidateRecovery?.isRecovering && !candidateRecovery.isTimeout && candidateRecovery.deadline) {
+      const updateCountdown = () => {
+        const remainingMs = candidateRecovery.deadline - Date.now();
+        if (remainingMs > 0) {
+          setRecoveryCountdown(Math.ceil(remainingMs / 1000));
+        } else {
+          setRecoveryCountdown(0);
+        }
+      };
+      
+      updateCountdown();
+      const interval = setInterval(updateCountdown, 1000);
+      return () => clearInterval(interval);
+    } else {
+      setRecoveryCountdown(null);
+    }
+  }, [candidateRecovery]);
+
   const copyRoomId = useCallback(() => {
     void navigator.clipboard.writeText(roomId);
   }, [roomId]);
@@ -494,7 +515,7 @@ export default function RoomPage({
                 <div className="flex flex-col">
                   <span className="text-yellow-200 text-sm font-medium">{candidateRecovery.message}</span>
                   <span className="text-yellow-400/80 text-xs text-center font-mono mt-0.5">
-                    {Math.ceil(candidateRecovery.remainingMs / 1000)}s
+                    {recoveryCountdown !== null ? `${recoveryCountdown}s` : `${Math.ceil((candidateRecovery.remainingMs || 0) / 1000)}s`}
                   </span>
                 </div>
               </motion.div>
