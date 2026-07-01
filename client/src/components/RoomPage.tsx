@@ -130,14 +130,17 @@ export default function RoomPage({
     roomState !== "waiting_for_candidate";
 
   const candidateRecoveryMessage =
-    candidateRecovery?.message || "Candidate has disconnected. Waiting for them to reconnect...";
+    candidateRecovery?.message ||
+    "Candidate has disconnected. Waiting for them to reconnect...";
 
   const candidateRecoverySeconds = Math.max(
     0,
-    Math.ceil((candidateRecovery?.remainingMs ?? 0) / 1000)
+    Math.ceil((candidateRecovery?.remainingMs ?? 0) / 1000),
   );
 
-  const [displayRecoverySeconds, setDisplayRecoverySeconds] = useState<number | null>(null);
+  const [displayRecoverySeconds, setDisplayRecoverySeconds] = useState<
+    number | null
+  >(null);
 
   useEffect(() => {
     if (!showCandidateRecoveryBanner) {
@@ -147,31 +150,71 @@ export default function RoomPage({
     const deadline = candidateRecovery?.deadline;
     const tick = () => {
       if (deadline) {
-        setDisplayRecoverySeconds(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+        setDisplayRecoverySeconds(
+          Math.max(0, Math.ceil((deadline - Date.now()) / 1000)),
+        );
       } else {
-        setDisplayRecoverySeconds(Math.max(0, Math.ceil((candidateRecovery?.remainingMs ?? 60000) / 1000)));
+        setDisplayRecoverySeconds(
+          Math.max(
+            0,
+            Math.ceil((candidateRecovery?.remainingMs ?? 60000) / 1000),
+          ),
+        );
       }
     };
     tick();
     const interval = window.setInterval(tick, 1000);
     return () => window.clearInterval(interval);
-  }, [showCandidateRecoveryBanner, candidateRecovery?.deadline, candidateRecovery?.remainingMs]);
+  }, [
+    showCandidateRecoveryBanner,
+    candidateRecovery?.deadline,
+    candidateRecovery?.remainingMs,
+  ]);
 
   const candidateInRoom = users.some((u) => u.role === "candidate");
 
   useEffect(() => {
     if (!isHr && !isSuperAdmin) return;
     // #region agent log
-    fetch('http://127.0.0.1:7702/ingest/dee3cf5d-b38e-4270-b181-d9f5b6a2165c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8e5ee0'},body:JSON.stringify({sessionId:'8e5ee0',location:'RoomPage.tsx:recovery-banner',message:'banner state',data:{showCandidateRecoveryBanner,isHr,isSuperAdmin,roomState,candidateRecovery,seconds:candidateRecoverySeconds},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
+    fetch("http://127.0.0.1:7702/ingest/dee3cf5d-b38e-4270-b181-d9f5b6a2165c", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": "8e5ee0",
+      },
+      body: JSON.stringify({
+        sessionId: "8e5ee0",
+        location: "RoomPage.tsx:recovery-banner",
+        message: "banner state",
+        data: {
+          showCandidateRecoveryBanner,
+          isHr,
+          isSuperAdmin,
+          roomState,
+          candidateRecovery,
+          seconds: candidateRecoverySeconds,
+        },
+        timestamp: Date.now(),
+        hypothesisId: "D",
+      }),
+    }).catch(() => {});
     // #endregion
-  }, [showCandidateRecoveryBanner, isHr, isSuperAdmin, roomState, candidateRecovery, candidateRecoverySeconds]);
+  }, [
+    showCandidateRecoveryBanner,
+    isHr,
+    isSuperAdmin,
+    roomState,
+    candidateRecovery,
+    candidateRecoverySeconds,
+  ]);
 
   // beforeunload guard — warn HR if they try to close the tab while a candidate is present
   useEffect(() => {
     if (!isHr || !candidateInRoom) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
-      e.returnValue = "A candidate is still in this interview. Leaving will interrupt their session.";
+      e.returnValue =
+        "A candidate is still in this interview. Leaving will interrupt their session.";
       return e.returnValue;
     };
     window.addEventListener("beforeunload", handler);
@@ -207,24 +250,33 @@ export default function RoomPage({
   const remoteVideoTracksBySocketId = new Map(
     remoteUsers
       .filter((remoteUser) => remoteUser.videoTrack)
-      .map((remoteUser) => [String(remoteUser.uid), remoteUser.videoTrack as VideoTrackLike])
+      .map((remoteUser) => [
+        String(remoteUser.uid),
+        remoteUser.videoTrack as VideoTrackLike,
+      ]),
   );
 
   const videoItems: VideoItem[] = [
     ...(shouldShowLocalVideo
-      ? [{
-          id: "local",
-          track: localCameraTrack,
-          isVideoEnabled,
-          userName,
-          role: resolvedRole,
-          isSpeaking: currentUser?.isSpeaking,
-          isLocal: true,
-        }]
+      ? [
+          {
+            id: "local",
+            track: localCameraTrack,
+            isVideoEnabled,
+            userName,
+            role: resolvedRole,
+            isSpeaking: currentUser?.isSpeaking,
+            isLocal: true,
+          },
+        ]
       : []),
     ...visibleRemoteRoomUsers.map((roomUser) => ({
       id: roomUser.id,
-      track: roomUser.isVideoEnabled ? remoteVideoTracksBySocketId.get(String(roomUser.agoraUid ?? roomUser.id)) : null,
+      track: roomUser.isVideoEnabled
+        ? remoteVideoTracksBySocketId.get(
+            String(roomUser.agoraUid ?? roomUser.id),
+          )
+        : null,
       isVideoEnabled: roomUser.isVideoEnabled,
       userName: roomUser.name,
       role: roomUser.role,
@@ -235,7 +287,11 @@ export default function RoomPage({
   const shouldShowVideoStrip = videoItems.length > 0;
 
   const roleLabel =
-    resolvedRole === "hr" ? "HR / Interviewer" : resolvedRole === "super_admin" ? "Super Admin Observer" : "Candidate";
+    resolvedRole === "hr"
+      ? "HR / Interviewer"
+      : resolvedRole === "super_admin"
+        ? "Super Admin Observer"
+        : "Candidate";
   const rolePillClass =
     resolvedRole === "hr"
       ? "from-purple-500/10 to-indigo-500/10 border-purple-500/20 text-purple-300"
@@ -243,13 +299,23 @@ export default function RoomPage({
         ? "from-orange-500/10 to-rose-500/10 border-orange-500/20 text-orange-300"
         : "from-emerald-500/10 to-teal-500/10 border-emerald-500/20 text-emerald-300";
   const roleDotClass =
-    resolvedRole === "hr" ? "bg-purple-500" : resolvedRole === "super_admin" ? "bg-orange-500" : "bg-emerald-500";
+    resolvedRole === "hr"
+      ? "bg-purple-500"
+      : resolvedRole === "super_admin"
+        ? "bg-orange-500"
+        : "bg-emerald-500";
 
   const renderRolePill = (compact = false) => (
-    <div className={`flex items-center gap-2 rounded-lg border bg-gradient-to-r font-semibold shadow-inner ${rolePillClass} ${compact ? "px-2.5 py-1.5 text-[11px]" : "w-full px-3 py-2 text-xs"}`}>
+    <div
+      className={`flex items-center gap-2 rounded-lg border bg-gradient-to-r font-semibold shadow-inner ${rolePillClass} ${compact ? "px-2.5 py-1.5 text-[11px]" : "w-full px-3 py-2 text-xs"}`}
+    >
       <span className="relative flex h-2 w-2">
-        <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${roleDotClass}`} />
-        <span className={`relative inline-flex h-2 w-2 rounded-full ${roleDotClass}`} />
+        <span
+          className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${roleDotClass}`}
+        />
+        <span
+          className={`relative inline-flex h-2 w-2 rounded-full ${roleDotClass}`}
+        />
       </span>
       <span className="truncate">{roleLabel}</span>
     </div>
@@ -260,16 +326,32 @@ export default function RoomPage({
       onClick={copyRoomId}
       className={`group flex min-w-0 items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.03] transition-colors hover:bg-white/[0.06] ${compact ? "px-2.5 py-1.5" : "w-full px-3 py-2"}`}
     >
-      <svg className="h-3.5 w-3.5 shrink-0 text-gray-500 transition-colors group-hover:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+      <svg
+        className="h-3.5 w-3.5 shrink-0 text-gray-500 transition-colors group-hover:text-gray-400"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2}
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+        />
       </svg>
       <span className="truncate font-mono text-xs text-gray-400">{roomId}</span>
-      {!compact && <span className="ml-auto text-[10px] text-gray-600 opacity-0 transition-opacity group-hover:opacity-100">Copy</span>}
+      {!compact && (
+        <span className="ml-auto text-[10px] text-gray-600 opacity-0 transition-opacity group-hover:opacity-100">
+          Copy
+        </span>
+      )}
     </button>
   );
 
   const renderObserverNotice = (compact = false) => (
-    <div className={`w-full rounded-xl border border-orange-500/20 bg-orange-500/10 text-orange-300 shadow-[0_0_15px_rgba(249,115,22,0.1)] ${compact ? "px-3 py-2" : "px-4 py-4"}`}>
+    <div
+      className={`w-full rounded-xl border border-orange-500/20 bg-orange-500/10 text-orange-300 shadow-[0_0_15px_rgba(249,115,22,0.1)] ${compact ? "px-3 py-2" : "px-4 py-4"}`}
+    >
       <div className="flex items-center gap-2 text-sm font-semibold text-orange-200">
         <span className="relative flex h-2.5 w-2.5">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-orange-400 opacity-75" />
@@ -279,7 +361,8 @@ export default function RoomPage({
       </div>
       {!compact && (
         <p className="mt-2 text-[11px] font-normal leading-relaxed text-orange-300/70">
-          You are viewing this room anonymously. Your microphone is completely disabled, and you are hidden from candidates and HR.
+          You are viewing this room anonymously. Your microphone is completely
+          disabled, and you are hidden from candidates and HR.
         </p>
       )}
     </div>
@@ -298,12 +381,32 @@ export default function RoomPage({
       }`}
     >
       {isVideoEnabled ? (
-        <svg className="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        <svg
+          className="h-5 w-5 shrink-0"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+          />
         </svg>
       ) : (
-        <svg className="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2zM3 3l18 18" />
+        <svg
+          className="h-5 w-5 shrink-0"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2zM3 3l18 18"
+          />
         </svg>
       )}
       <span>{isVideoEnabled ? "Camera" : "Camera Off"}</span>
@@ -319,19 +422,31 @@ export default function RoomPage({
           whileTap={{ scale: 0.97 }}
           className={`w-full rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 font-semibold text-white shadow-lg shadow-blue-500/20 transition-all duration-300 hover:shadow-blue-500/40 disabled:cursor-not-allowed disabled:opacity-60 ${compact ? "px-3 py-3 text-xs" : "py-3 text-sm"}`}
         >
-          {isTranscriptionChanging ? (transcriptionCountdown ? `Starting in ${transcriptionCountdown}` : "Starting...") : "Start Transcription"}
+          {isTranscriptionChanging
+            ? transcriptionCountdown
+              ? `Starting in ${transcriptionCountdown}`
+              : "Starting..."
+            : "Start Transcription"}
         </motion.button>
       ) : (
-        <div className={compact ? "grid grid-cols-[1fr_auto] gap-2" : "space-y-2"}>
+        <div
+          className={compact ? "grid grid-cols-[1fr_auto] gap-2" : "space-y-2"}
+        >
           <div className="flex w-full items-center justify-between rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-3 text-xs font-medium text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.1)] sm:px-4 sm:text-sm">
             <div className="flex min-w-0 items-center gap-2">
               <span className="relative flex h-2.5 w-2.5 shrink-0">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                 <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
               </span>
-              <span className="truncate">{compact ? "AI Live" : "AI Live Transcription Active"}</span>
+              <span className="truncate">
+                {compact ? "AI Live" : "AI Live Transcription Active"}
+              </span>
             </div>
-            {!compact && <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-200">Live</span>}
+            {!compact && (
+              <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-200">
+                Live
+              </span>
+            )}
           </div>
           <motion.button
             onClick={onStopTranscription}
@@ -368,7 +483,11 @@ export default function RoomPage({
 
     return (
       <div className="grid grid-cols-2 gap-2">
-        <MuteButton isMuted={isMuted} onToggle={onToggleMute} compact={mobile} />
+        <MuteButton
+          isMuted={isMuted}
+          onToggle={onToggleMute}
+          compact={mobile}
+        />
         {renderVideoToggleButton(mobile)}
       </div>
     );
@@ -393,19 +512,29 @@ export default function RoomPage({
       <div className="border-b border-white/[0.06] p-5">
         <div className="mb-3 flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 shadow-lg shadow-blue-500/20">
-            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+            <svg
+              className="h-5 w-5 text-white"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+              />
             </svg>
           </div>
           <div>
             <h1 className="text-base font-bold text-white">LiveRoom</h1>
-            <p className="text-[11px] text-gray-500">Speaker Conversational Workspace</p>
+            <p className="text-[11px] text-gray-500">
+              Speaker Conversational Workspace
+            </p>
           </div>
         </div>
         {renderRoomIdButton()}
-        <div className="mt-3">
-          {renderRolePill()}
-        </div>
+        <div className="mt-3">{renderRolePill()}</div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 py-4">
@@ -413,7 +542,11 @@ export default function RoomPage({
       </div>
 
       <div className="space-y-3 border-t border-white/[0.06] p-5">
-        <ConnectionStatus isConnected={isConnected} isAgoraJoined={isAgoraJoined} isTranscribing={isTranscribing} />
+        <ConnectionStatus
+          isConnected={isConnected}
+          isAgoraJoined={isAgoraJoined}
+          isTranscribing={isTranscribing}
+        />
         <div className="space-y-2 pt-2">
           {renderMediaControls()}
           {renderTranscriptionControl()}
@@ -486,46 +619,61 @@ export default function RoomPage({
 
       {/* ── Candidate Recovery Timeout Modal (HR / Admin) ── */}
       <AnimatePresence>
-        {(isHr || isSuperAdmin) && candidateRecovery?.isTimeout && roomState !== "waiting_for_candidate" && (
-          <motion.div
-            key="candidate-recovery-timeout"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
-          >
+        {(isHr || isSuperAdmin) &&
+          candidateRecovery?.isTimeout &&
+          roomState !== "waiting_for_candidate" && (
             <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0f0f13] p-6 shadow-2xl"
+              key="candidate-recovery-timeout"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
             >
-              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-yellow-500/20 bg-yellow-500/10">
-                <svg className="h-6 w-6 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-              </div>
-              <h3 className="mb-2 text-lg font-semibold text-white">Candidate Disconnected</h3>
-              <p className="mb-6 text-sm leading-relaxed text-white/60">
-                The candidate has not reconnected within 60 seconds. Would you like to keep waiting or end the interview now?
-              </p>
-              <div className="flex flex-col gap-3">
-                <button
-                  onClick={handleKeepWaiting}
-                  className="w-full rounded-xl bg-yellow-500/90 py-2.5 text-sm font-semibold text-black transition-all hover:bg-yellow-500"
-                >
-                  Keep Waiting
-                </button>
-                <button
-                  onClick={handleEndInterviewTimeout}
-                  className="w-full rounded-xl border border-white/[0.08] bg-white/[0.04] py-2.5 text-sm font-medium text-gray-300 transition-colors hover:bg-white/[0.08]"
-                >
-                  End Interview
-                </button>
-              </div>
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0f0f13] p-6 shadow-2xl"
+              >
+                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-yellow-500/20 bg-yellow-500/10">
+                  <svg
+                    className="h-6 w-6 text-yellow-500"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                    />
+                  </svg>
+                </div>
+                <h3 className="mb-2 text-lg font-semibold text-white">
+                  Candidate Disconnected
+                </h3>
+                <p className="mb-6 text-sm leading-relaxed text-white/60">
+                  The candidate has not reconnected within 60 seconds. Would you
+                  like to keep waiting or end the interview now?
+                </p>
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={handleKeepWaiting}
+                    className="w-full rounded-xl bg-yellow-500/90 py-2.5 text-sm font-semibold text-black transition-all hover:bg-yellow-500"
+                  >
+                    Keep Waiting
+                  </button>
+                  <button
+                    onClick={handleEndInterviewTimeout}
+                    className="w-full rounded-xl border border-white/[0.08] bg-white/[0.04] py-2.5 text-sm font-medium text-gray-300 transition-colors hover:bg-white/[0.08]"
+                  >
+                    End Interview
+                  </button>
+                </div>
+              </motion.div>
             </motion.div>
-          </motion.div>
-        )}
+          )}
       </AnimatePresence>
 
       {/* ── End Interview Confirm Dialog (HR only) ── */}
@@ -547,14 +695,27 @@ export default function RoomPage({
             >
               <div className="mb-1 flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-500/15">
-                  <svg className="h-5 w-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <svg
+                    className="h-5 w-5 text-red-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
                   </svg>
                 </div>
-                <h2 className="text-base font-bold text-white">End Interview?</h2>
+                <h2 className="text-base font-bold text-white">
+                  End Interview?
+                </h2>
               </div>
               <p className="mb-5 mt-2 text-sm leading-relaxed text-gray-400">
-                The candidate is still in the room. Ending the interview will close the session and save the transcript.
+                The candidate is still in the room. Ending the interview will
+                close the session and save the transcript.
               </p>
               <div className="flex gap-3">
                 <button
@@ -595,39 +756,52 @@ export default function RoomPage({
       >
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:flex lg:flex-col lg:overflow-y-auto">
           <AnimatePresence>
-            {(isHr || isSuperAdmin) && roomState === "waiting_for_candidate" && (
-              <motion.div
-                initial={{ y: -100, opacity: 0, x: "-50%" }}
-                animate={{ y: 0, opacity: 1, x: "-50%" }}
-                exit={{ y: -100, opacity: 0, x: "-50%" }}
-                transition={{ type: "spring", stiffness: 400, damping: 32 }}
-                className="fixed left-1/2 top-6 z-[100] flex w-[90%] max-w-3xl items-center justify-between gap-4 rounded-2xl border border-yellow-500/30 bg-yellow-500/20 px-5 py-4 shadow-[0_10px_40px_-10px_rgba(234,179,8,0.35)] backdrop-blur-md sm:w-auto sm:min-w-[500px]"
-              >
-                <div className="flex items-center gap-3 text-sm font-semibold text-yellow-100">
-                  <span className="relative flex h-2.5 w-2.5 shrink-0">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-yellow-400 opacity-60" />
-                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-yellow-400" />
-                  </span>
-                  <span>Waiting for candidate to reconnect...</span>
-                </div>
-              </motion.div>
-            )}
+            {(isHr || isSuperAdmin) &&
+              roomState === "waiting_for_candidate" && (
+                <motion.div
+                  initial={{ y: -100, opacity: 0, x: "-50%" }}
+                  animate={{ y: 0, opacity: 1, x: "-50%" }}
+                  exit={{ y: -100, opacity: 0, x: "-50%" }}
+                  transition={{ type: "spring", stiffness: 400, damping: 32 }}
+                  className="fixed left-1/2 top-6 z-[100] flex w-[90%] max-w-3xl items-center justify-between gap-4 rounded-2xl border border-yellow-500/30 bg-yellow-500/20 px-5 py-4 shadow-[0_10px_40px_-10px_rgba(234,179,8,0.35)] backdrop-blur-md sm:w-auto sm:min-w-[500px]"
+                >
+                  <div className="flex items-center gap-3 text-sm font-semibold text-yellow-100">
+                    <span className="relative flex h-2.5 w-2.5 shrink-0">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-yellow-400 opacity-60" />
+                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-yellow-400" />
+                    </span>
+                    <span>Waiting for candidate to reconnect...</span>
+                  </div>
+                </motion.div>
+              )}
           </AnimatePresence>
-
-          <div className="flex flex-col lg:flex-row h-full">
-            {/* LEFT COLUMN: Main Video & Participants */}
+          {/* Mobile Header & Details */}
           <header className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/70 px-3 py-2.5 backdrop-blur-md sm:px-4 lg:hidden">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-purple-600">
-                    <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                    <svg
+                      className="h-4 w-4 text-white"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={1.8}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                      />
                     </svg>
                   </div>
                   <div className="min-w-0">
-                    <h1 className="truncate text-sm font-bold text-white">LiveRoom</h1>
-                    <p className="truncate text-[10px] text-gray-500">Realtime workspace</p>
+                    <h1 className="truncate text-sm font-bold text-white">
+                      LiveRoom
+                    </h1>
+                    <p className="truncate text-[10px] text-gray-500">
+                      Realtime workspace
+                    </p>
                   </div>
                 </div>
               </div>
@@ -637,40 +811,56 @@ export default function RoomPage({
             </div>
             <div className="mt-2 flex items-center gap-2 overflow-hidden">
               {renderRolePill(true)}
-              <div className={`ml-auto h-2 w-2 shrink-0 rounded-full ${isConnected ? "bg-emerald-400" : "bg-red-400"}`} />
+              <div
+                className={`ml-auto h-2 w-2 shrink-0 rounded-full ${isConnected ? "bg-emerald-400" : "bg-red-400"}`}
+              />
             </div>
           </header>
 
           <details className="group shrink-0 border-b border-white/[0.06] bg-[#09090d]/90 backdrop-blur-md lg:hidden">
             <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-gray-400 sm:px-4">
               <span>Participants and Status</span>
-              <svg className="h-3.5 w-3.5 text-gray-500 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
+              <svg
+                className="h-3.5 w-3.5 text-gray-500 transition-transform group-open:rotate-180"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2.5}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M6 9l6 6 6-6"
+                />
               </svg>
             </summary>
             <div className="grid max-h-[34dvh] gap-3 overflow-y-auto border-t border-white/[0.05] px-3 py-3 sm:grid-cols-[minmax(0,1fr)_260px] sm:px-4">
               <UserList users={users} currentUserId={currentUserId} />
-              <ConnectionStatus isConnected={isConnected} isAgoraJoined={isAgoraJoined} isTranscribing={isTranscribing} />
+              <ConnectionStatus
+                isConnected={isConnected}
+                isAgoraJoined={isAgoraJoined}
+                isTranscribing={isTranscribing}
+              />
             </div>
           </details>
 
           {shouldShowVideoStrip && (
             <section className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/40 px-3 py-3 backdrop-blur-md sm:px-4 lg:px-6 lg:py-4">
               <div className="grid gap-2 sm:grid-cols-2 lg:flex lg:h-[clamp(170px,27vh,280px)] lg:items-stretch lg:gap-4 lg:overflow-x-auto lg:pb-1">
-              {videoItems.map((item) => {
-                return (
-                  <VideoPlayer
-                    key={item.id}
+                {videoItems.map((item) => {
+                  return (
+                    <VideoPlayer
+                      key={item.id}
                       track={item.track}
                       isVideoEnabled={item.isVideoEnabled}
                       userName={item.userName}
-                    role={item.role}
-                    isSpeaking={item.isSpeaking}
-                    isLocal={item.isLocal}
-                    className="h-[clamp(150px,28dvh,220px)] w-full min-w-0 lg:h-full lg:w-auto lg:min-w-[260px] lg:max-w-[min(52vw,560px)] xl:min-w-[300px]"
-                  />
-                );
-              })}
+                      role={item.role}
+                      isSpeaking={item.isSpeaking}
+                      isLocal={item.isLocal}
+                      className="h-[clamp(150px,28dvh,220px)] w-full min-w-0 lg:h-full lg:w-auto lg:min-w-[260px] lg:max-w-[min(52vw,560px)] xl:min-w-[300px]"
+                    />
+                  );
+                })}
               </div>
             </section>
           )}
@@ -704,7 +894,6 @@ export default function RoomPage({
                 transcriptSaveStatus={transcriptSaveStatus}
               />
             </div>
-          </div>
           </div>
         </div>
 
