@@ -112,26 +112,6 @@ export default function RoomPage({
   roomState,
 }: RoomPageProps) {
   const [showEndConfirm, setShowEndConfirm] = useState(false);
-  const [recoveryCountdown, setRecoveryCountdown] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (candidateRecovery?.isRecovering && !candidateRecovery.isTimeout && candidateRecovery.deadline) {
-      const updateCountdown = () => {
-        const remainingMs = candidateRecovery.deadline - Date.now();
-        if (remainingMs > 0) {
-          setRecoveryCountdown(Math.ceil(remainingMs / 1000));
-        } else {
-          setRecoveryCountdown(0);
-        }
-      };
-      
-      updateCountdown();
-      const interval = setInterval(updateCountdown, 1000);
-      return () => clearInterval(interval);
-    } else {
-      setRecoveryCountdown(null);
-    }
-  }, [candidateRecovery]);
 
   const copyRoomId = useCallback(() => {
     void navigator.clipboard.writeText(roomId);
@@ -141,6 +121,20 @@ export default function RoomPage({
   const resolvedRole = userRole || currentUser?.role || "candidate";
   const isHr = resolvedRole === "hr";
   const isSuperAdmin = resolvedRole === "super_admin";
+
+  const showCandidateRecoveryBanner =
+    (isHr || isSuperAdmin) &&
+    (candidateRecovery?.isRecovering || roomState === "candidate_recovering") &&
+    !candidateRecovery?.isTimeout &&
+    roomState !== "waiting_for_candidate";
+
+  const candidateRecoveryMessage =
+    candidateRecovery?.message || "Candidate has disconnected. Waiting for them to reconnect...";
+
+  const candidateRecoverySeconds = Math.max(
+    0,
+    Math.ceil((candidateRecovery?.remainingMs ?? 0) / 1000)
+  );
 
   const candidateInRoom = users.some((u) => u.role === "candidate");
 
@@ -434,6 +428,78 @@ export default function RoomPage({
         )}
       </AnimatePresence>
 
+      {/* ── Candidate Recovery Banner (HR / Admin) ── */}
+      <AnimatePresence>
+        {showCandidateRecoveryBanner && (
+          <motion.div
+            key="candidate-recovery-banner"
+            initial={{ y: -100, opacity: 0, x: "-50%" }}
+            animate={{ y: 0, opacity: 1, x: "-50%" }}
+            exit={{ y: -100, opacity: 0, x: "-50%" }}
+            transition={{ type: "spring", stiffness: 400, damping: 32 }}
+            className="fixed left-1/2 top-6 z-[100] flex w-[90%] max-w-3xl items-center justify-between gap-4 rounded-2xl border border-yellow-500/30 bg-yellow-500/20 px-5 py-4 shadow-[0_10px_40px_-10px_rgba(234,179,8,0.35)] backdrop-blur-md sm:w-auto sm:min-w-[500px]"
+          >
+            <div className="flex items-center gap-3 text-sm font-semibold text-yellow-100">
+              <span className="relative flex h-2.5 w-2.5 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-yellow-400 opacity-60" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-yellow-400" />
+              </span>
+              <span>{candidateRecoveryMessage}</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="font-mono text-lg font-bold text-yellow-200">
+                {candidateRecoverySeconds}s
+              </span>
+              <span className="text-xs text-yellow-300/80">remaining</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Candidate Recovery Timeout Modal (HR / Admin) ── */}
+      <AnimatePresence>
+        {(isHr || isSuperAdmin) && candidateRecovery?.isTimeout && roomState !== "waiting_for_candidate" && (
+          <motion.div
+            key="candidate-recovery-timeout"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0f0f13] p-6 shadow-2xl"
+            >
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-yellow-500/20 bg-yellow-500/10">
+                <svg className="h-6 w-6 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h3 className="mb-2 text-lg font-semibold text-white">Candidate Disconnected</h3>
+              <p className="mb-6 text-sm leading-relaxed text-white/60">
+                The candidate has not reconnected within 60 seconds. Would you like to keep waiting or end the interview now?
+              </p>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={handleKeepWaiting}
+                  className="w-full rounded-xl bg-yellow-500/90 py-2.5 text-sm font-semibold text-black transition-all hover:bg-yellow-500"
+                >
+                  Keep Waiting
+                </button>
+                <button
+                  onClick={handleEndInterviewTimeout}
+                  className="w-full rounded-xl border border-white/[0.08] bg-white/[0.04] py-2.5 text-sm font-medium text-gray-300 transition-colors hover:bg-white/[0.08]"
+                >
+                  End Interview
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* ── End Interview Confirm Dialog (HR only) ── */}
       <AnimatePresence>
         {showEndConfirm && (
@@ -500,82 +566,16 @@ export default function RoomPage({
         className="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-hidden"
       >
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:flex lg:flex-col lg:overflow-y-auto">
-          {/* Candidate Recovery Active Banner (HR/Admin Side) */}
           <AnimatePresence>
-            {(isHr || isSuperAdmin) && candidateRecovery?.isRecovering && !candidateRecovery.isTimeout && roomState !== "waiting_for_candidate" && (
-              <motion.div
-                initial={{ y: -50, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                exit={{ y: -50, opacity: 0 }}
-                className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full 
-                         bg-yellow-500/20 border border-yellow-500/30 backdrop-blur-md shadow-2xl
-                         flex items-center gap-3"
-              >
-                <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
-                <div className="flex flex-col">
-                  <span className="text-yellow-200 text-sm font-medium">{candidateRecovery.message}</span>
-                  <span className="text-yellow-400/80 text-xs text-center font-mono mt-0.5">
-                    {recoveryCountdown !== null ? `${recoveryCountdown}s` : `${Math.ceil((candidateRecovery.remainingMs || 0) / 1000)}s`}
-                  </span>
-                </div>
-              </motion.div>
-            )}
             {(isHr || isSuperAdmin) && roomState === "waiting_for_candidate" && (
               <motion.div
                 initial={{ y: -50, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 exit={{ y: -50, opacity: 0 }}
-                className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full 
-                         bg-yellow-500/20 border border-yellow-500/30 backdrop-blur-md shadow-2xl
-                         flex items-center gap-3"
+                className="mx-4 mt-4 flex items-center gap-3 rounded-2xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-3"
               >
-                <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
-                <div className="flex flex-col">
-                  <span className="text-yellow-200 text-sm font-medium">Waiting for candidate to reconnect...</span>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Candidate Recovery Timeout Modal (HR/Admin Side) */}
-          <AnimatePresence>
-            {(isHr || isSuperAdmin) && candidateRecovery?.isTimeout && roomState !== "waiting_for_candidate" && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
-              >
-                <motion.div
-                  initial={{ scale: 0.95, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  exit={{ scale: 0.95, opacity: 0 }}
-                  className="bg-[#0f0f13] border border-white/10 rounded-2xl p-6 max-w-sm w-full shadow-2xl"
-                >
-                  <div className="w-12 h-12 rounded-full bg-yellow-500/10 flex items-center justify-center mb-4 border border-yellow-500/20">
-                    <svg className="w-6 h-6 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                  </div>
-                  <h3 className="text-lg font-semibold text-white mb-2">Candidate Disconnected</h3>
-                  <p className="text-white/60 text-sm mb-6 leading-relaxed">
-                    The candidate has not reconnected within 60 seconds. Would you like to keep waiting or end the interview now?
-                  </p>
-                  <div className="flex flex-col gap-3">
-                    <button
-                      onClick={handleKeepWaiting}
-                      className="w-full px-4 py-2.5 bg-white text-black text-sm font-semibold rounded-xl hover:bg-white/90 transition-colors"
-                    >
-                      Keep Waiting
-                    </button>
-                    <button
-                      onClick={handleEndInterviewTimeout}
-                      className="w-full px-4 py-2.5 bg-red-500/10 text-red-500 text-sm font-semibold rounded-xl hover:bg-red-500/20 border border-red-500/20 transition-colors"
-                    >
-                      End Interview
-                    </button>
-                  </div>
-                </motion.div>
+                <div className="h-2 w-2 animate-pulse rounded-full bg-yellow-500" />
+                <span className="text-sm font-medium text-yellow-200">Waiting for candidate to reconnect...</span>
               </motion.div>
             )}
           </AnimatePresence>
@@ -670,6 +670,7 @@ export default function RoomPage({
                 transcriptSaveStatus={transcriptSaveStatus}
               />
             </div>
+          </div>
           </div>
         </div>
 

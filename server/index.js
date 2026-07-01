@@ -743,16 +743,19 @@ function enterCandidateRecoveryMode(roomId, candidateSocket) {
     remainingMs: RECOVERY_MS,
   });
 
+  let remaining = Math.ceil(RECOVERY_MS / 1000);
   const tickId = setInterval(() => {
     const fresh = getRoom(roomId);
-    if (!fresh || !fresh.candidateRecovery.isRecovering) return;
-    const remaining = Math.max(0, fresh.candidateRecovery.deadline - Date.now());
-    io.to(roomId).emit("candidate-recovering", {
-      message: "Candidate has disconnected. Waiting for them to reconnect...",
-      deadline: fresh.candidateRecovery.deadline,
-      remainingMs: remaining,
+    if (!fresh || !fresh.candidateRecovery.isRecovering) {
+      clearInterval(tickId);
+      return;
+    }
+    remaining = Math.max(0, Math.ceil((fresh.candidateRecovery.deadline - Date.now()) / 1000));
+    io.to(roomId).emit("candidate-recovery-tick", {
+      remainingMs: Math.max(0, fresh.candidateRecovery.deadline - Date.now()),
     });
-  }, 5000);
+    if (remaining <= 0) clearInterval(tickId);
+  }, 1000);
 
   const timerId = setTimeout(() => {
     clearInterval(tickId);
@@ -761,6 +764,7 @@ function enterCandidateRecoveryMode(roomId, candidateSocket) {
     if (fresh) {
       fresh.candidateRecovery.isRecovering = false;
       io.to(roomId).emit("candidate-recovery-timeout");
+      broadcastProjectedRoomState(roomId);
       console.log(`[Recovery] Candidate recovery timeout for room ${roomId}. Prompting HR for decision.`);
     }
   }, RECOVERY_MS);

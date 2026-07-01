@@ -61,6 +61,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       setIsTranscriptionChanging(false);
       setTranscriptionCountdown(null);
       setHrRecovery(null);
+      setCandidateRecovery(null);
       roomStateVersionRef.current = 0;
     }
 
@@ -146,7 +147,19 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
           deadline: state.candidateRecovery!.deadline ?? Date.now() + (state.candidateRecovery!.remainingMs ?? 60000),
           isTimeout: prev?.isTimeout || false,
         }));
-      } else if (!state.candidateRecovery) {
+      } else if (state.state === "candidate_recovering") {
+        setCandidateRecovery((prev) => ({
+          isRecovering: true,
+          message: prev?.message || "Candidate has disconnected. Waiting for them to reconnect...",
+          remainingMs: prev?.remainingMs ?? 60000,
+          deadline: prev?.deadline ?? Date.now() + 60000,
+          isTimeout: prev?.isTimeout || false,
+        }));
+      } else if (!state.candidateRecovery && state.state !== "waiting_for_candidate") {
+        setCandidateRecovery((prev) => (prev?.isTimeout ? prev : null));
+      }
+
+      if (state.state === "waiting_for_candidate") {
         setCandidateRecovery(null);
       }
     });
@@ -192,9 +205,23 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       setCandidateRecovery({ isRecovering: true, message, remainingMs, deadline, isTimeout: false });
     });
 
+    socket.on("candidate-recovery-tick", ({ remainingMs }: { remainingMs: number }) => {
+      setCandidateRecovery((prev) => (prev?.isRecovering ? { ...prev, remainingMs } : prev));
+    });
+
     socket.on("candidate-recovery-timeout", () => {
       console.log("[Socket] candidate-recovery-timeout");
-      setCandidateRecovery((prev) => prev ? { ...prev, isTimeout: true } : null);
+      setCandidateRecovery((prev) =>
+        prev
+          ? { ...prev, isRecovering: false, isTimeout: true, remainingMs: 0 }
+          : {
+              isRecovering: false,
+              isTimeout: true,
+              message: "Candidate has disconnected. Waiting for them to reconnect...",
+              remainingMs: 0,
+              deadline: Date.now(),
+            }
+      );
     });
 
     socket.on("candidate-rejoined", ({ message }: { message: string }) => {

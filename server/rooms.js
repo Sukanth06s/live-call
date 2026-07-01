@@ -206,6 +206,7 @@ function getProjectedRoomState(roomId, requestorRole) {
           isRecovering: true,
           disconnectedHrName: room.hrRecovery.disconnectedHrName,
           remainingMs: Math.max(0, (room.hrRecovery.deadline || 0) - now),
+          deadline: room.hrRecovery.deadline,
         }
       : null,
     candidateRecovery: room.candidateRecovery?.isRecovering
@@ -213,6 +214,7 @@ function getProjectedRoomState(roomId, requestorRole) {
           isRecovering: true,
           disconnectedCandidateName: room.candidateRecovery.disconnectedCandidateName,
           remainingMs: Math.max(0, (room.candidateRecovery.deadline || 0) - now),
+          deadline: room.candidateRecovery.deadline,
         }
       : null,
   };
