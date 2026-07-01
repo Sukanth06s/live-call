@@ -787,9 +787,10 @@ function cancelCandidateRecovery(roomId) {
     candidateRecoveryTimers.delete(roomId);
   }
   const room = getRoom(roomId);
-  if (room) {
+  if (room && room.candidateRecovery) {
     room.state = "active";
     room.candidateRecovery.isRecovering = false;
+    room.candidateRecovery.isTimeout = false;
     room.candidateRecovery.disconnectedAt = null;
     room.candidateRecovery.deadline = null;
     room.candidateRecovery.disconnectedCandidateAuthUserId = null;
@@ -1644,7 +1645,12 @@ io.on("connection", (socket) => {
 
         socket.emit("join-ack", { roomId: liveRoom.roomId, role: "candidate", language: liveRoom.language });
 
-        if (candidateRecoveryTimers.has(liveRoom.roomId)) {
+        if (
+          candidateRecoveryTimers.has(liveRoom.roomId) ||
+          liveRoom.state === "candidate_recovering" ||
+          liveRoom.state === "candidate_timeout" ||
+          liveRoom.state === "waiting_for_candidate"
+        ) {
           cancelCandidateRecovery(liveRoom.roomId);
           io.to(liveRoom.roomId).emit("candidate-rejoined", {
             message: "The candidate has reconnected.",
@@ -1806,7 +1812,13 @@ io.on("connection", (socket) => {
       });
     }
 
-    if (requestedRole === "candidate" && candidateRecoveryTimers.has(roomId)) {
+    if (
+      requestedRole === "candidate" &&
+      (candidateRecoveryTimers.has(roomId) ||
+        room.state === "candidate_recovering" ||
+        room.state === "candidate_timeout" ||
+        room.state === "waiting_for_candidate")
+    ) {
       cancelCandidateRecovery(roomId);
       io.to(roomId).emit("candidate-rejoined", {
         message: "The candidate has reconnected.",

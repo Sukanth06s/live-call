@@ -597,13 +597,19 @@ export default function RoomPage({
           <AnimatePresence>
             {(isHr || isSuperAdmin) && roomState === "waiting_for_candidate" && (
               <motion.div
-                initial={{ y: -50, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                exit={{ y: -50, opacity: 0 }}
-                className="mx-4 mt-4 flex items-center gap-3 rounded-2xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-3"
+                initial={{ y: -100, opacity: 0, x: "-50%" }}
+                animate={{ y: 0, opacity: 1, x: "-50%" }}
+                exit={{ y: -100, opacity: 0, x: "-50%" }}
+                transition={{ type: "spring", stiffness: 400, damping: 32 }}
+                className="fixed left-1/2 top-6 z-[100] flex w-[90%] max-w-3xl items-center justify-between gap-4 rounded-2xl border border-yellow-500/30 bg-yellow-500/20 px-5 py-4 shadow-[0_10px_40px_-10px_rgba(234,179,8,0.35)] backdrop-blur-md sm:w-auto sm:min-w-[500px]"
               >
-                <div className="h-2 w-2 animate-pulse rounded-full bg-yellow-500" />
-                <span className="text-sm font-medium text-yellow-200">Waiting for candidate to reconnect...</span>
+                <div className="flex items-center gap-3 text-sm font-semibold text-yellow-100">
+                  <span className="relative flex h-2.5 w-2.5 shrink-0">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-yellow-400 opacity-60" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-yellow-400" />
+                  </span>
+                  <span>Waiting for candidate to reconnect...</span>
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
