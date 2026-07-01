@@ -844,7 +844,9 @@ export default function RoomPage({
             </div>
           </details>
 
-          <div className="min-h-0 flex-1 lg:grid lg:grid-cols-[minmax(420px,0.95fr)_minmax(0,1.05fr)] lg:items-start lg:overflow-visible">
+          <div
+            className={`min-h-0 flex-1 lg:grid ${isHr || isSuperAdmin ? "lg:grid-cols-[minmax(420px,0.95fr)_minmax(0,1.05fr)]" : "lg:grid-cols-1 max-w-5xl mx-auto w-full"} lg:items-start lg:overflow-visible`}
+          >
             {/* LEFT SIDE: Videos and Candidate Verification */}
             <div className="flex flex-col min-w-0">
               {shouldShowVideoStrip && (
@@ -880,23 +882,25 @@ export default function RoomPage({
               />
             </div>
 
-            <div className="min-h-[360px] flex-1 overflow-hidden pb-4 sm:min-h-[420px] lg:sticky lg:top-0 lg:h-[100dvh] lg:min-h-0 lg:pb-0">
-              <TranscriptPanel
-                blocks={blocks}
-                currentUserName={userName}
-                roomId={roomId}
-                onEditBlock={onEditBlock}
-                onClearTranscript={onClearTranscript}
-                onReplaceTranscript={onReplaceTranscript}
-                isTranscribing={isTranscribing}
-                isHr={isHr}
-                isSuperAdmin={isSuperAdmin}
-                onStopTranscription={onStopTranscription}
-                isTranscriptionChanging={isTranscriptionChanging}
-                onSaveFinalTranscript={onSaveFinalTranscript}
-                transcriptSaveStatus={transcriptSaveStatus}
-              />
-            </div>
+            {(isHr || isSuperAdmin) && (
+              <div className="min-h-[360px] flex-1 overflow-hidden pb-4 sm:min-h-[420px] lg:sticky lg:top-0 lg:h-[100dvh] lg:min-h-0 lg:pb-0">
+                <TranscriptPanel
+                  blocks={blocks}
+                  currentUserName={userName}
+                  roomId={roomId}
+                  onEditBlock={onEditBlock}
+                  onClearTranscript={onClearTranscript}
+                  onReplaceTranscript={onReplaceTranscript}
+                  isTranscribing={isTranscribing}
+                  isHr={isHr}
+                  isSuperAdmin={isSuperAdmin}
+                  onStopTranscription={onStopTranscription}
+                  isTranscriptionChanging={isTranscriptionChanging}
+                  onSaveFinalTranscript={onSaveFinalTranscript}
+                  transcriptSaveStatus={transcriptSaveStatus}
+                />
+              </div>
+            )}
           </div>
         </div>
 
