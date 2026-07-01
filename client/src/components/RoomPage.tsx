@@ -844,38 +844,41 @@ export default function RoomPage({
             </div>
           </details>
 
-          {shouldShowVideoStrip && (
-            <section className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/40 px-3 py-3 backdrop-blur-md sm:px-4 lg:px-6 lg:py-4">
-              <div className="grid gap-2 sm:grid-cols-2 lg:flex lg:h-[clamp(170px,27vh,280px)] lg:items-stretch lg:gap-4 lg:overflow-x-auto lg:pb-1">
-                {videoItems.map((item) => {
-                  return (
-                    <VideoPlayer
-                      key={item.id}
-                      track={item.track}
-                      isVideoEnabled={item.isVideoEnabled}
-                      userName={item.userName}
-                      role={item.role}
-                      isSpeaking={item.isSpeaking}
-                      isLocal={item.isLocal}
-                      className="h-[clamp(150px,28dvh,220px)] w-full min-w-0 lg:h-full lg:w-auto lg:min-w-[260px] lg:max-w-[min(52vw,560px)] xl:min-w-[300px]"
-                    />
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
           <div className="min-h-0 flex-1 lg:grid lg:grid-cols-[minmax(420px,0.95fr)_minmax(0,1.05fr)] lg:items-start lg:overflow-visible">
-            <CandidateVideoPanel
-              roomId={roomId}
-              accessToken={accessToken}
-              userRole={resolvedRole}
-              users={users}
-              currentUserId={currentUserId}
-              remoteUsers={remoteUsers}
-              socket={socket}
-              layout="workspace"
-            />
+            {/* LEFT SIDE: Videos and Candidate Verification */}
+            <div className="flex flex-col min-w-0">
+              {shouldShowVideoStrip && (
+                <section className="shrink-0 border-b border-white/[0.06] bg-[#0b0b10]/40 px-3 py-3 backdrop-blur-md sm:px-4 lg:px-6 lg:py-4">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:flex lg:h-[clamp(170px,27vh,280px)] lg:items-stretch lg:gap-4 lg:overflow-x-auto lg:pb-1">
+                    {videoItems.map((item) => {
+                      return (
+                        <VideoPlayer
+                          key={item.id}
+                          track={item.track}
+                          isVideoEnabled={item.isVideoEnabled}
+                          userName={item.userName}
+                          role={item.role}
+                          isSpeaking={item.isSpeaking}
+                          isLocal={item.isLocal}
+                          className="h-[clamp(150px,28dvh,220px)] w-full min-w-0 lg:h-full lg:w-auto lg:min-w-[260px] lg:max-w-[min(52vw,560px)] xl:min-w-[300px]"
+                        />
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+
+              <CandidateVideoPanel
+                roomId={roomId}
+                accessToken={accessToken}
+                userRole={resolvedRole}
+                users={users}
+                currentUserId={currentUserId}
+                remoteUsers={remoteUsers}
+                socket={socket}
+                layout="workspace"
+              />
+            </div>
 
             <div className="min-h-[360px] flex-1 overflow-hidden pb-4 sm:min-h-[420px] lg:sticky lg:top-0 lg:h-[100dvh] lg:min-h-0 lg:pb-0">
               <TranscriptPanel
