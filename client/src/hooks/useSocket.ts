@@ -136,6 +136,19 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       } else {
         setHrRecovery(null);
       }
+
+      // Sync candidateRecovery from room-state broadcast
+      if (state.candidateRecovery?.isRecovering) {
+        setCandidateRecovery((prev) => ({
+          isRecovering: true,
+          message: "Candidate has disconnected. Waiting for them to reconnect...",
+          remainingMs: state.candidateRecovery!.remainingMs ?? 60000,
+          deadline: state.candidateRecovery!.deadline ?? Date.now() + (state.candidateRecovery!.remainingMs ?? 60000),
+          isTimeout: prev?.isTimeout || false,
+        }));
+      } else if (!state.candidateRecovery) {
+        setCandidateRecovery(null);
+      }
     });
 
     socket.on("transcription-starting", ({ countdown }: { countdown: number }) => {

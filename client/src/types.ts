@@ -73,6 +73,12 @@ export interface RoomState {
     remainingMs?: number;
     deadline?: number;
   } | null;
+  candidateRecovery?: {
+    isRecovering: boolean;
+    disconnectedCandidateName?: string;
+    remainingMs?: number;
+    deadline?: number;
+  } | null;
 }
 
 export interface CandidateVideo {
