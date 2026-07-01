@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { ActiveTranscriptionSession, RoomLanguage, RoomState, RoomUser, TranscriptBlock } from "@/types";
+import { ActiveTranscriptionSession, InterviewState, RoomLanguage, RoomState, RoomUser, TranscriptBlock } from "@/types";
 import { formatIstDateTime } from "@/lib/time";
 
 let SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
@@ -23,7 +23,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
   const [users, setUsers] = useState<RoomUser[]>([]);
   const [blocks, setBlocks] = useState<TranscriptBlock[]>([]);
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
-  const [roomState, setRoomState] = useState<string | null>(null);
+  const [roomState, setRoomState] = useState<InterviewState | null>(null);
   const [activeTranscriptionSession, setActiveTranscriptionSession] = useState<ActiveTranscriptionSession | null>(null);
   const [transcriptSaveStatus, setTranscriptSaveStatus] = useState<string | null>(null);
   const [isTranscriptionChanging, setIsTranscriptionChanging] = useState(false);
@@ -118,7 +118,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       console.log("[Socket] Received room-state:", state);
       setUsers(state.users);
       setBlocks(state.blocks || []);
-      setRoomState(state.state);
+      setRoomState(state.state ?? null);
       if (state.activeTranscriptionSession) {
         setActiveTranscriptionSession(state.activeTranscriptionSession);
       }
@@ -202,11 +202,26 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     // Candidate Recovery events
     socket.on("candidate-recovering", ({ message, remainingMs, deadline }: { message: string; remainingMs: number; deadline: number }) => {
       console.log("[Socket] candidate-recovering:", message, remainingMs);
+      // #region agent log
+      fetch('http://127.0.0.1:7702/ingest/dee3cf5d-b38e-4270-b181-d9f5b6a2165c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8e5ee0'},body:JSON.stringify({sessionId:'8e5ee0',location:'useSocket.ts:candidate-recovering',message:'recovery event received',data:{remainingMs,deadline,roomIdRef:roomIdRef.current},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       setCandidateRecovery({ isRecovering: true, message, remainingMs, deadline, isTimeout: false });
     });
 
     socket.on("candidate-recovery-tick", ({ remainingMs }: { remainingMs: number }) => {
-      setCandidateRecovery((prev) => (prev?.isRecovering ? { ...prev, remainingMs } : prev));
+      // #region agent log
+      if (remainingMs % 10000 < 1100 || remainingMs > 55000) fetch('http://127.0.0.1:7702/ingest/dee3cf5d-b38e-4270-b181-d9f5b6a2165c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8e5ee0'},body:JSON.stringify({sessionId:'8e5ee0',location:'useSocket.ts:candidate-recovery-tick',message:'tick received',data:{remainingMs,roomIdRef:roomIdRef.current},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
+      setCandidateRecovery((prev) => {
+        if (prev?.isRecovering) return { ...prev, remainingMs };
+        return {
+          isRecovering: true,
+          message: "Candidate has disconnected. Waiting for them to reconnect...",
+          remainingMs,
+          deadline: Date.now() + remainingMs,
+          isTimeout: false,
+        };
+      });
     });
 
     socket.on("candidate-recovery-timeout", () => {

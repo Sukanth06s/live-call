@@ -754,6 +754,9 @@ function enterCandidateRecoveryMode(roomId, candidateSocket) {
     io.to(roomId).emit("candidate-recovery-tick", {
       remainingMs: Math.max(0, fresh.candidateRecovery.deadline - Date.now()),
     });
+    // #region agent log
+    if (remaining % 10 === 0 || remaining >= 58) fetch('http://127.0.0.1:7702/ingest/dee3cf5d-b38e-4270-b181-d9f5b6a2165c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8e5ee0'},body:JSON.stringify({sessionId:'8e5ee0',location:'server/index.js:candidate-recovery-tick',message:'tick emitted',data:{roomId,remaining,remainingMs:Math.max(0,fresh.candidateRecovery.deadline-Date.now())},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     if (remaining <= 0) clearInterval(tickId);
   }, 1000);
 
@@ -771,6 +774,9 @@ function enterCandidateRecoveryMode(roomId, candidateSocket) {
 
   candidateRecoveryTimers.set(roomId, { timerId, tickId });
   console.log(`[Recovery] Room ${roomId} entered candidate_recovering. 60s window open.`);
+  // #region agent log
+  fetch('http://127.0.0.1:7702/ingest/dee3cf5d-b38e-4270-b181-d9f5b6a2165c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8e5ee0'},body:JSON.stringify({sessionId:'8e5ee0',location:'server/index.js:enterCandidateRecoveryMode',message:'candidate recovery started',data:{roomId,deadline:room.candidateRecovery.deadline,state:room.state,hrPresent:!!room.hrUser},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
 }
 
 function cancelCandidateRecovery(roomId) {

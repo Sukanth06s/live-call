@@ -15,8 +15,9 @@ type RemoteUserLike = {
 };
 
 type SocketLike = {
-  on: (event: string, callback: (payload: { roomId?: string }) => void) => void;
-  off: (event: string, callback: (payload: { roomId?: string }) => void) => void;
+  on: (event: string, callback: (...args: unknown[]) => void) => void;
+  off: (event: string, callback: (...args: unknown[]) => void) => void;
+  emit?: (event: string, payload?: Record<string, unknown>) => void;
 };
 
 type RecordingState = "idle" | "recording" | "preview" | "saving" | "saved" | "discarded";
@@ -187,7 +188,8 @@ export default function CandidateVideoPanel({
 
   useEffect(() => {
     if (!socket) return;
-    const handler = (payload: { roomId?: string }) => {
+    const handler = (...args: unknown[]) => {
+      const payload = (args[0] || {}) as { roomId?: string };
       if (!payload.roomId || payload.roomId === roomId) void refreshVideoState();
     };
     socket.on("candidate-video-updated", handler);
