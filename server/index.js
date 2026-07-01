@@ -1633,6 +1633,19 @@ io.on("connection", (socket) => {
         socket.join(liveRoom.roomId);
 
         socket.emit("join-ack", { roomId: liveRoom.roomId, role: "candidate", language: liveRoom.language });
+
+        if (candidateRecoveryTimers.has(liveRoom.roomId)) {
+          cancelCandidateRecovery(liveRoom.roomId);
+          io.to(liveRoom.roomId).emit("candidate-rejoined", {
+            message: "The candidate has reconnected.",
+            candidateName: durableName,
+          });
+        }
+        if (abandonedRecoveryTimers.has(liveRoom.roomId)) {
+          cancelAbandonedMode(liveRoom.roomId);
+          io.to(liveRoom.roomId).emit("room-recovered", { message: `${durableName} has joined the room.` });
+        }
+
         broadcastProjectedRoomState(liveRoom.roomId);
         console.log(`[Recovery] Candidate rejoined existing room ${liveRoom.roomId} instead of creating a new one.`);
         return;
