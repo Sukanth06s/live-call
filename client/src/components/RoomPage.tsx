@@ -66,6 +66,7 @@ interface RoomPageProps {
   onStopTranscription: () => void;
   onSaveFinalTranscript?: () => void;
   transcriptSaveStatus?: string | null;
+  roomState?: string | null;
 }
 
 type VideoItem = {
@@ -108,6 +109,7 @@ export default function RoomPage({
   onStopTranscription,
   onSaveFinalTranscript,
   transcriptSaveStatus,
+  roomState,
 }: RoomPageProps) {
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const copyRoomId = useCallback(() => {
@@ -477,9 +479,9 @@ export default function RoomPage({
         className="relative z-10 flex h-full min-w-0 flex-1 flex-col overflow-hidden"
       >
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:flex lg:flex-col lg:overflow-y-auto">
-          {/* Candidate Recovery Active Banner (HR Side) */}
+          {/* Candidate Recovery Active Banner (HR/Admin Side) */}
           <AnimatePresence>
-            {isHr && candidateRecovery?.isRecovering && !candidateRecovery.isTimeout && (
+            {(isHr || isSuperAdmin) && candidateRecovery?.isRecovering && !candidateRecovery.isTimeout && roomState !== "waiting_for_candidate" && (
               <motion.div
                 initial={{ y: -50, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
@@ -497,11 +499,26 @@ export default function RoomPage({
                 </div>
               </motion.div>
             )}
+            {(isHr || isSuperAdmin) && roomState === "waiting_for_candidate" && (
+              <motion.div
+                initial={{ y: -50, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: -50, opacity: 0 }}
+                className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full 
+                         bg-yellow-500/20 border border-yellow-500/30 backdrop-blur-md shadow-2xl
+                         flex items-center gap-3"
+              >
+                <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
+                <div className="flex flex-col">
+                  <span className="text-yellow-200 text-sm font-medium">Waiting for candidate to reconnect...</span>
+                </div>
+              </motion.div>
+            )}
           </AnimatePresence>
 
-          {/* Candidate Recovery Timeout Modal (HR Side) */}
+          {/* Candidate Recovery Timeout Modal (HR/Admin Side) */}
           <AnimatePresence>
-            {isHr && candidateRecovery?.isTimeout && (
+            {(isHr || isSuperAdmin) && candidateRecovery?.isTimeout && roomState !== "waiting_for_candidate" && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}

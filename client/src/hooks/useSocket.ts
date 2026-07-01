@@ -23,6 +23,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
   const [users, setUsers] = useState<RoomUser[]>([]);
   const [blocks, setBlocks] = useState<TranscriptBlock[]>([]);
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
+  const [roomState, setRoomState] = useState<string | null>(null);
   const [activeTranscriptionSession, setActiveTranscriptionSession] = useState<ActiveTranscriptionSession | null>(null);
   const [transcriptSaveStatus, setTranscriptSaveStatus] = useState<string | null>(null);
   const [isTranscriptionChanging, setIsTranscriptionChanging] = useState(false);
@@ -54,6 +55,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       setUsers([]);
       setBlocks([]);
       setCurrentRoomId(null);
+      setRoomState(null);
       setActiveTranscriptionSession(null);
       setTranscriptSaveStatus(null);
       setIsTranscriptionChanging(false);
@@ -115,6 +117,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       console.log("[Socket] Received room-state:", state);
       setUsers(state.users);
       setBlocks(state.blocks || []);
+      setRoomState(state.state);
       if (state.activeTranscriptionSession) {
         setActiveTranscriptionSession(state.activeTranscriptionSession);
       }
@@ -341,7 +344,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     isConnected,
     users,
     blocks,
-    currentRoomId,
+    roomState,
     activeTranscriptionSession,
     transcriptSaveStatus,
     isTranscriptionChanging,

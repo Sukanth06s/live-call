@@ -88,6 +88,7 @@ export default function Home() {
     isConnected,
     users,
     blocks,
+    roomState,
     activeTranscriptionSession,
     transcriptSaveStatus,
     isTranscriptionChanging,
@@ -449,6 +450,7 @@ export default function Home() {
       remoteUsers={remoteUsers}
       accessToken={accessToken}
       socket={socket}
+      roomState={roomState}
       isMuted={isMuted}
       isVideoEnabled={isVideoEnabled}
       isConnected={isConnected}
