@@ -149,21 +149,27 @@ export default function TranscriptPanel({
         <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/[0.05] bg-[#0a0a0f]/60 shadow-2xl sm:rounded-3xl">
           
           {/* Box Header */}
-          <div className="flex shrink-0 flex-col gap-3 border-b border-white/[0.05] bg-[#0c0c12]/40 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-4">
-            <div className="flex min-w-0 flex-wrap items-center gap-3 sm:gap-4">
-              <div className="flex items-center gap-2">
-                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)] animate-pulse" />
-                <h3 className="text-[11px] font-bold uppercase tracking-widest text-emerald-400 sm:text-xs">Candidate Speech Log</h3>
+          <div className="grid shrink-0 gap-3 border-b border-white/[0.05] bg-[#0c0c12]/40 px-3 py-3 sm:px-5 sm:py-4 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-start">
+            <div className="min-w-0 space-y-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)] animate-pulse" />
+                <h3 className="min-w-0 text-[11px] font-bold uppercase tracking-widest text-emerald-400 sm:text-xs">
+                  Candidate Speech Log
+                </h3>
               </div>
-              
+
               {/* Core live stats indicators inside header */}
-              <div className="hidden items-center gap-3 border-l border-white/[0.06] pl-4 font-mono text-[10px] font-bold uppercase tracking-wider text-gray-500 md:flex">
-                <span className="flex items-center gap-1">
-                  Engine: <span className={isTranscribing ? "text-emerald-400" : "text-gray-500"}>{isTranscribing ? "Connected" : "Idle"}</span>
+              <div className="flex min-w-0 flex-wrap gap-2 font-mono text-[9px] font-bold uppercase tracking-wider text-gray-500 sm:text-[10px]">
+                <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.025] px-2 py-1">
+                  Engine:
+                  <span className={isTranscribing ? "text-emerald-400" : "text-gray-500"}>
+                    {isTranscribing ? "Connected" : "Idle"}
+                  </span>
                 </span>
                 {isTranscribing && (
-                  <span className="flex items-center gap-1 text-purple-400">
-                    Elapsed: <span>{formatElapsed(elapsedSeconds)}</span>
+                  <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-purple-500/15 bg-purple-500/10 px-2 py-1 text-purple-300">
+                    Elapsed:
+                    <span>{formatElapsed(elapsedSeconds)}</span>
                   </span>
                 )}
               </div>
@@ -171,7 +177,7 @@ export default function TranscriptPanel({
             
             {/* Actions Bar */}
             {!isSuperAdmin && candidateBlocks.length > 0 && !isEditing && (
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="grid w-full grid-cols-1 gap-2 min-[430px]:grid-cols-2 2xl:w-auto 2xl:min-w-[180px] 2xl:grid-cols-1">
                 {isHr && onSaveFinalTranscript && (
                   <button
                     onClick={() => {
@@ -179,7 +185,7 @@ export default function TranscriptPanel({
                         onSaveFinalTranscript();
                       }
                     }}
-                    className="flex items-center gap-1 rounded-lg border border-blue-500/20 bg-blue-500/10 px-2.5 py-1.5 text-[10px] font-bold uppercase text-blue-300 transition-all hover:bg-blue-500 hover:text-white sm:px-3 sm:text-[11px]"
+                    className="inline-flex h-10 min-w-0 items-center justify-center gap-1 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 text-[10px] font-bold uppercase text-blue-300 transition-all hover:bg-blue-500 hover:text-white sm:text-[11px]"
                     title="Save final transcript under this candidate"
                   >
                     <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -192,7 +198,7 @@ export default function TranscriptPanel({
                 )}
                 <button
                   onClick={handleStartOverallEdit}
-                  className="flex items-center gap-1 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] font-bold uppercase text-emerald-400 transition-all hover:bg-emerald-500 hover:text-white sm:px-3 sm:text-[11px]"
+                  className="inline-flex h-10 min-w-0 items-center justify-center gap-1 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 text-[10px] font-bold uppercase text-emerald-400 transition-all hover:bg-emerald-500 hover:text-white sm:text-[11px]"
                   title="Edit accumulated transcript content"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -208,7 +214,7 @@ export default function TranscriptPanel({
                         onClearTranscript();
                       }
                     }}
-                    className="flex items-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1.5 text-[10px] font-bold uppercase text-red-400 transition-all hover:bg-red-500 hover:text-white sm:px-3 sm:text-[11px]"
+                    className="inline-flex h-10 min-w-0 items-center justify-center gap-1 rounded-lg border border-red-500/20 bg-red-500/10 px-3 text-[10px] font-bold uppercase text-red-400 transition-all hover:bg-red-500 hover:text-white sm:text-[11px]"
                     title="Clear transcript content"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
