@@ -149,7 +149,7 @@ export default function TranscriptPanel({
         <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/[0.05] bg-[#0a0a0f]/60 shadow-2xl sm:rounded-3xl">
           
           {/* Box Header */}
-          <div className="grid shrink-0 gap-3 border-b border-white/[0.05] bg-[#0c0c12]/40 px-3 py-3 sm:px-5 sm:py-4 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-start">
+          <div className="grid shrink-0 gap-3 border-b border-white/[0.05] bg-[#0c0c12]/40 px-3 py-3 sm:px-5 sm:py-4">
             <div className="min-w-0 space-y-3">
               <div className="flex min-w-0 items-center gap-2">
                 <div className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)] animate-pulse" />
@@ -159,15 +159,15 @@ export default function TranscriptPanel({
               </div>
 
               {/* Core live stats indicators inside header */}
-              <div className="flex min-w-0 flex-wrap gap-2 font-mono text-[9px] font-bold uppercase tracking-wider text-gray-500 sm:text-[10px]">
-                <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.025] px-2 py-1">
+              <div className="grid min-w-0 gap-2 font-mono text-[9px] font-bold uppercase tracking-wider text-gray-500 min-[420px]:grid-cols-2 sm:text-[10px]">
+                <span className="inline-flex min-w-0 items-center justify-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.025] px-2 py-1">
                   Engine:
                   <span className={isTranscribing ? "text-emerald-400" : "text-gray-500"}>
                     {isTranscribing ? "Connected" : "Idle"}
                   </span>
                 </span>
                 {isTranscribing && (
-                  <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-purple-500/15 bg-purple-500/10 px-2 py-1 text-purple-300">
+                  <span className="inline-flex min-w-[112px] items-center justify-center gap-1 rounded-full border border-purple-500/15 bg-purple-500/10 px-2 py-1 text-purple-300">
                     Elapsed:
                     <span>{formatElapsed(elapsedSeconds)}</span>
                   </span>
@@ -177,7 +177,7 @@ export default function TranscriptPanel({
             
             {/* Actions Bar */}
             {!isSuperAdmin && candidateBlocks.length > 0 && !isEditing && (
-              <div className="grid w-full grid-cols-1 gap-2 min-[430px]:grid-cols-2 2xl:w-auto 2xl:min-w-[180px] 2xl:grid-cols-1">
+              <div className="grid w-full grid-cols-1 gap-2 min-[420px]:grid-cols-2">
                 {isHr && onSaveFinalTranscript && (
                   <button
                     onClick={() => {
