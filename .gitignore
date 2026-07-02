@@ -10,6 +10,8 @@ node_modules
 
 # logs
 npm-debug.log*
+debug-*.log
+*.log
 
 # mac
 .DS_Store
@@ -17,6 +19,7 @@ npm-debug.log*
 # build
 dist
 build
+repo-tree.txt
 
 # vscode
 .vscode

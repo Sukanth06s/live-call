@@ -30,6 +30,23 @@ interface ActiveRoom {
     disconnectedHrName?: string;
     remainingMs?: number;
   } | null;
+  candidateRecovery?: {
+    isRecovering: boolean;
+    disconnectedCandidateName?: string;
+    remainingMs?: number;
+    deadline?: number;
+  } | null;
+}
+
+interface CandidateRecoveryRoom {
+  hasRecoveryRoom: boolean;
+  roomId?: string;
+  state?: "candidate_recovering" | "waiting_for_candidate";
+  language?: RoomLanguage;
+  hrName?: string;
+  candidateName?: string;
+  remainingMs?: number | null;
+  expiresAt?: string | null;
 }
 
 const languages: { value: RoomLanguage; label: string }[] = [
@@ -40,6 +57,14 @@ const languages: { value: RoomLanguage; label: string }[] = [
 
 const getLanguageLabel = (language?: string) =>
   languages.find((item) => item.value === language)?.label || "English";
+
+function getSocketHttpUrl() {
+  let socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
+  if (socketUrl && !socketUrl.startsWith("http://") && !socketUrl.startsWith("https://")) {
+    socketUrl = `https://${socketUrl}`;
+  }
+  return socketUrl;
+}
 
 export default function Lobby({ 
   onJoinRoom, 
@@ -59,16 +84,16 @@ export default function Lobby({
   const [activeRooms, setActiveRooms] = useState<ActiveRoom[]>([]);
   const [loadingRooms, setLoadingRooms] = useState(false);
   const [roomError, setRoomError] = useState<string | null>(null);
+  const [candidateRecoveryRoom, setCandidateRecoveryRoom] = useState<CandidateRecoveryRoom | null>(null);
+  const [loadingRecoveryRoom, setLoadingRecoveryRoom] = useState(false);
+  const [recoveryRoomError, setRecoveryRoomError] = useState<string | null>(null);
 
   // Fetch active rooms for Super Admin
   const fetchActiveRooms = useCallback(async () => {
     if ((authorizedRole !== "super_admin" && authorizedRole !== "hr") || !accessToken) return;
     try {
       setRoomError(null);
-      let socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
-      if (socketUrl && !socketUrl.startsWith("http://") && !socketUrl.startsWith("https://")) {
-        socketUrl = `https://${socketUrl}`;
-      }
+      const socketUrl = getSocketHttpUrl();
       const res = await fetch(`${socketUrl}/api/rooms`, {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -80,6 +105,30 @@ export default function Lobby({
     } catch (err: unknown) {
       console.error("[Lobby] Error fetching rooms:", err);
       setRoomError(err instanceof Error ? err.message : String(err));
+    }
+  }, [authorizedRole, accessToken]);
+
+  const fetchCandidateRecoveryRoom = useCallback(async () => {
+    if (authorizedRole !== "candidate" || !accessToken) {
+      setCandidateRecoveryRoom(null);
+      return;
+    }
+
+    try {
+      setRecoveryRoomError(null);
+      const socketUrl = getSocketHttpUrl();
+      const res = await fetch(`${socketUrl}/api/candidate/recovery-room`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      if (!res.ok) throw new Error("Failed to check recovery room");
+      const data = await res.json();
+      setCandidateRecoveryRoom(data?.hasRecoveryRoom ? data : null);
+    } catch (err: unknown) {
+      console.error("[Lobby] Error checking candidate recovery room:", err);
+      setCandidateRecoveryRoom(null);
+      setRecoveryRoomError(err instanceof Error ? err.message : String(err));
     }
   }, [authorizedRole, accessToken]);
 
@@ -103,6 +152,26 @@ export default function Lobby({
     }
   }, [authorizedRole, accessToken, fetchActiveRooms]);
 
+  useEffect(() => {
+    if (authorizedRole !== "candidate" || !accessToken) {
+      return;
+    }
+
+    let isCancelled = false;
+    const loadRecoveryRoom = async () => {
+      setLoadingRecoveryRoom(true);
+      await fetchCandidateRecoveryRoom();
+      if (!isCancelled) setLoadingRecoveryRoom(false);
+    };
+
+    void loadRecoveryRoom();
+    const interval = setInterval(fetchCandidateRecoveryRoom, 3000);
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+    };
+  }, [authorizedRole, accessToken, fetchCandidateRecoveryRoom]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!userName.trim()) return;
@@ -119,6 +188,10 @@ export default function Lobby({
     sessionStorage.setItem("intendedRole", authorizedRole);
     onJoinRoom(targetRoomId, userName.trim(), authorizedRole);
   };
+
+  const hasCandidateRecoveryRoom =
+    authorizedRole === "candidate" &&
+    Boolean(candidateRecoveryRoom?.hasRecoveryRoom && candidateRecoveryRoom.roomId);
 
   return (
     <div className="relative flex min-h-[100dvh] items-center justify-center overflow-x-hidden overflow-y-auto bg-[#07070a] p-3 sm:p-4">
@@ -271,11 +344,16 @@ export default function Lobby({
                     <div className="grid max-h-[min(42dvh,260px)] grid-cols-1 gap-3 overflow-y-auto pr-1 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10 sm:grid-cols-2">
                       {activeRooms.map((room) => {
                         const isLiveTranscribing = room.state === "transcribing";
-                        const isRecovering = room.state === "hr_recovering";
+                        const isHrRecovering = room.state === "hr_recovering";
+                        const isCandidateRecovering = room.state === "candidate_recovering" || room.state === "waiting_for_candidate";
+                        const isRecovering = isHrRecovering || isCandidateRecovering;
                         const isAbandoned = room.state === "abandoned";
                         const canJoin = authorizedRole === "super_admin" || isRecovering || isAbandoned || !room.isFull;
-                        const remainingSecs = isRecovering && room.hrRecovery?.remainingMs != null
-                          ? Math.max(0, Math.ceil(room.hrRecovery.remainingMs / 1000))
+                        const remainingMs = isHrRecovering
+                          ? room.hrRecovery?.remainingMs
+                          : room.candidateRecovery?.remainingMs;
+                        const remainingSecs = isRecovering && remainingMs != null
+                          ? Math.max(0, Math.ceil(remainingMs / 1000))
                           : null;
                         return (
                           <motion.div
@@ -318,9 +396,14 @@ export default function Lobby({
                                 </svg>
                                 <span>{getLanguageLabel(room.language)} · {room.participantCount}/2</span>
                               </div>
-                              {isRecovering && room.hrRecovery?.disconnectedHrName && (
+                              {isHrRecovering && room.hrRecovery?.disconnectedHrName && (
                                 <div className="truncate text-[10px] font-medium text-red-400/80">
                                   {room.hrRecovery.disconnectedHrName} disconnected
+                                </div>
+                              )}
+                              {isCandidateRecovering && (
+                                <div className="truncate text-[10px] font-medium text-red-400/80">
+                                  Candidate disconnected
                                 </div>
                               )}
                               {!isRecovering && room.hrName && (
@@ -375,40 +458,89 @@ export default function Lobby({
                   exit={{ opacity: 0, height: 0 }}
                   className="space-y-4"
                 >
-                  <div>
-                    <label className="block text-[11px] font-bold text-gray-500 mb-2 uppercase tracking-wider select-none">
-                      Interview Language
-                    </label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {languages.map((language) => (
-                        <button
-                          key={language.value}
-                          type="button"
-                          onClick={() => setSelectedLanguage(language.value)}
-                          className={`rounded-xl border px-3 py-3 text-xs font-bold uppercase tracking-wider transition-all ${
-                            selectedLanguage === language.value
-                              ? "border-indigo-400/40 bg-indigo-500/20 text-white shadow-md shadow-indigo-500/10"
-                              : "border-white/[0.06] bg-white/[0.03] text-gray-500 hover:text-gray-300"
-                          }`}
-                        >
-                          {language.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  {hasCandidateRecoveryRoom ? (
+                    <div className="space-y-4">
+                      <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/[0.06] p-4 shadow-lg shadow-emerald-950/20">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <span className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-emerald-300">
+                            <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.8)]" />
+                            Interview Waiting
+                          </span>
+                          {candidateRecoveryRoom?.language && (
+                            <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-gray-400">
+                              {getLanguageLabel(candidateRecoveryRoom.language)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-sm font-semibold leading-snug text-white">
+                            {candidateRecoveryRoom?.hrName || "HR"} is waiting for you to rejoin the interview.
+                          </p>
+                          <p className="text-xs leading-relaxed text-gray-400">
+                            You will return to the same room that was already open for you.
+                          </p>
+                        </div>
+                      </div>
 
-                  <motion.button
-                    type="submit"
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.98 }}
-                    disabled={!isConnected || !userName.trim()}
-                    className="w-full py-3.5 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold text-xs uppercase tracking-widest cursor-pointer
-                      shadow-lg shadow-blue-500/10 hover:shadow-blue-500/25
-                      disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:shadow-blue-500/10
-                      transition-all duration-300 mt-2"
-                  >
-                    Join a Room
-                  </motion.button>
+                      <motion.button
+                        type="button"
+                        whileHover={{ scale: 1.01 }}
+                        whileTap={{ scale: 0.98 }}
+                        disabled={!isConnected || !userName.trim() || !candidateRecoveryRoom?.roomId}
+                        onClick={() => candidateRecoveryRoom?.roomId && handleJoinActiveRoom(candidateRecoveryRoom.roomId)}
+                        className="w-full cursor-pointer rounded-xl bg-gradient-to-r from-emerald-500 to-blue-600 py-3.5 text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-emerald-500/10 transition-all duration-300 hover:from-emerald-400 hover:to-blue-500 hover:shadow-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        Rejoin Interview
+                      </motion.button>
+                    </div>
+                  ) : (
+                    <>
+                      {loadingRecoveryRoom && (
+                        <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-4 py-3 text-center text-[11px] font-semibold text-gray-500">
+                          Checking for an open interview...
+                        </div>
+                      )}
+                      {recoveryRoomError && (
+                        <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/10 px-4 py-3 text-[11px] text-yellow-200">
+                          {recoveryRoomError}
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-[11px] font-bold text-gray-500 mb-2 uppercase tracking-wider select-none">
+                          Interview Language
+                        </label>
+                        <div className="grid grid-cols-3 gap-2">
+                          {languages.map((language) => (
+                            <button
+                              key={language.value}
+                              type="button"
+                              onClick={() => setSelectedLanguage(language.value)}
+                              className={`rounded-xl border px-3 py-3 text-xs font-bold uppercase tracking-wider transition-all ${
+                                selectedLanguage === language.value
+                                  ? "border-indigo-400/40 bg-indigo-500/20 text-white shadow-md shadow-indigo-500/10"
+                                  : "border-white/[0.06] bg-white/[0.03] text-gray-500 hover:text-gray-300"
+                              }`}
+                            >
+                              {language.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <motion.button
+                        type="submit"
+                        whileHover={{ scale: 1.01 }}
+                        whileTap={{ scale: 0.98 }}
+                        disabled={!isConnected || !userName.trim()}
+                        className="w-full py-3.5 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold text-xs uppercase tracking-widest cursor-pointer
+                          shadow-lg shadow-blue-500/10 hover:shadow-blue-500/25
+                          disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:shadow-blue-500/10
+                          transition-all duration-300 mt-2"
+                      >
+                        Join a Room
+                      </motion.button>
+                    </>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>

@@ -138,75 +138,7 @@ export default function RoomPage({
     Math.ceil((candidateRecovery?.remainingMs ?? 0) / 1000),
   );
 
-  const [displayRecoverySeconds, setDisplayRecoverySeconds] = useState<
-    number | null
-  >(null);
-
-  useEffect(() => {
-    if (!showCandidateRecoveryBanner) {
-      setDisplayRecoverySeconds(null);
-      return;
-    }
-    const deadline = candidateRecovery?.deadline;
-    const tick = () => {
-      if (deadline) {
-        setDisplayRecoverySeconds(
-          Math.max(0, Math.ceil((deadline - Date.now()) / 1000)),
-        );
-      } else {
-        setDisplayRecoverySeconds(
-          Math.max(
-            0,
-            Math.ceil((candidateRecovery?.remainingMs ?? 60000) / 1000),
-          ),
-        );
-      }
-    };
-    tick();
-    const interval = window.setInterval(tick, 1000);
-    return () => window.clearInterval(interval);
-  }, [
-    showCandidateRecoveryBanner,
-    candidateRecovery?.deadline,
-    candidateRecovery?.remainingMs,
-  ]);
-
   const candidateInRoom = users.some((u) => u.role === "candidate");
-
-  useEffect(() => {
-    if (!isHr && !isSuperAdmin) return;
-    // #region agent log
-    fetch("http://127.0.0.1:7702/ingest/dee3cf5d-b38e-4270-b181-d9f5b6a2165c", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "8e5ee0",
-      },
-      body: JSON.stringify({
-        sessionId: "8e5ee0",
-        location: "RoomPage.tsx:recovery-banner",
-        message: "banner state",
-        data: {
-          showCandidateRecoveryBanner,
-          isHr,
-          isSuperAdmin,
-          roomState,
-          candidateRecovery,
-          seconds: candidateRecoverySeconds,
-        },
-        timestamp: Date.now(),
-        hypothesisId: "D",
-      }),
-    }).catch(() => {});
-    // #endregion
-  }, [
-    showCandidateRecoveryBanner,
-    isHr,
-    isSuperAdmin,
-    roomState,
-    candidateRecovery,
-    candidateRecoverySeconds,
-  ]);
 
   // beforeunload guard — warn HR if they try to close the tab while a candidate is present
   useEffect(() => {
@@ -609,7 +541,7 @@ export default function RoomPage({
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <span className="font-mono text-lg font-bold text-yellow-200">
-                {displayRecoverySeconds ?? candidateRecoverySeconds}s
+                {candidateRecoverySeconds}s
               </span>
               <span className="text-xs text-yellow-300/80">remaining</span>
             </div>

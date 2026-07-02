@@ -339,6 +339,29 @@ function getRoomForCandidateVideoAction(video) {
   return getRoomByInterviewId(video?.interview_id) || getRoomByCandidateId(video?.candidate_user_id);
 }
 
+function getRecoverableCandidateRoom(candidateUserId) {
+  if (!candidateUserId) return null;
+
+  const recoverableStates = new Set(["candidate_recovering", "waiting_for_candidate"]);
+  const candidates = [];
+
+  for (const summary of getAllRooms()) {
+    const room = getRoom(summary.roomId);
+    if (!room) continue;
+
+    const roomCandidateId = room.candidateUser?.authUserId || room.lastCandidateUser?.authUserId;
+    if (roomCandidateId !== candidateUserId) continue;
+    if (!recoverableStates.has(room.state)) continue;
+    if (!room.hrUser) continue;
+    if (room.candidateUser && room.candidateUser.authUserId !== candidateUserId) continue;
+
+    candidates.push(room);
+  }
+
+  candidates.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  return candidates[0] || null;
+}
+
 function assertRoomParticipant(room, userId, role) {
   if (!room) {
     const err = new Error("Room is no longer active.");
@@ -754,9 +777,6 @@ function enterCandidateRecoveryMode(roomId, candidateSocket) {
     io.to(roomId).emit("candidate-recovery-tick", {
       remainingMs: Math.max(0, fresh.candidateRecovery.deadline - Date.now()),
     });
-    // #region agent log
-    if (remaining % 10 === 0 || remaining >= 58) fetch('http://127.0.0.1:7702/ingest/dee3cf5d-b38e-4270-b181-d9f5b6a2165c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8e5ee0'},body:JSON.stringify({sessionId:'8e5ee0',location:'server/index.js:candidate-recovery-tick',message:'tick emitted',data:{roomId,remaining,remainingMs:Math.max(0,fresh.candidateRecovery.deadline-Date.now())},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
     if (remaining <= 0) clearInterval(tickId);
   }, 1000);
 
@@ -774,9 +794,6 @@ function enterCandidateRecoveryMode(roomId, candidateSocket) {
 
   candidateRecoveryTimers.set(roomId, { timerId, tickId });
   console.log(`[Recovery] Room ${roomId} entered candidate_recovering. 60s window open.`);
-  // #region agent log
-  fetch('http://127.0.0.1:7702/ingest/dee3cf5d-b38e-4270-b181-d9f5b6a2165c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8e5ee0'},body:JSON.stringify({sessionId:'8e5ee0',location:'server/index.js:enterCandidateRecoveryMode',message:'candidate recovery started',data:{roomId,deadline:room.candidateRecovery.deadline,state:room.state,hrPresent:!!room.hrUser},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
-  // #endregion
 }
 
 function cancelCandidateRecovery(roomId) {
@@ -1265,6 +1282,38 @@ app.get("/api/rooms", async (req, res) => {
     res.json({ rooms: getRoomsForRole(profile.role, profile.language) });
   } catch (err) {
     res.status(401).json({ error: "Invalid token" });
+  }
+});
+
+app.get("/api/candidate/recovery-room", async (req, res) => {
+  try {
+    const { user, profile } = await getAuthenticatedRequestContext(req);
+    if (profile.role !== "candidate") {
+      return res.status(403).json({ error: "Candidate recovery lookup requires Candidate access" });
+    }
+
+    const room = getRecoverableCandidateRoom(user.id);
+    if (!room) {
+      return res.json({ hasRecoveryRoom: false });
+    }
+
+    const remainingMs =
+      room.candidateRecovery?.isRecovering && room.candidateRecovery.deadline
+        ? Math.max(0, room.candidateRecovery.deadline - Date.now())
+        : null;
+
+    res.json({
+      hasRecoveryRoom: true,
+      roomId: room.roomId,
+      state: room.state,
+      language: room.language,
+      hrName: room.hrUser?.name || room.lastHrUser?.name || "HR",
+      candidateName: room.lastCandidateUser?.name || room.candidateUser?.name || profile.displayName,
+      remainingMs,
+      expiresAt: remainingMs !== null ? new Date(Date.now() + remainingMs).toISOString() : null,
+    });
+  } catch (err) {
+    sendApiError(res, err, "Could not check candidate recovery room");
   }
 });
 

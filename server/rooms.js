@@ -143,6 +143,14 @@ function getAllRooms() {
             remainingMs: Math.max(0, (room.hrRecovery.deadline || 0) - now),
           }
         : null,
+      candidateRecovery: room.candidateRecovery?.isRecovering
+        ? {
+            isRecovering: true,
+            disconnectedCandidateName: room.candidateRecovery.disconnectedCandidateName,
+            remainingMs: Math.max(0, (room.candidateRecovery.deadline || 0) - now),
+            deadline: room.candidateRecovery.deadline,
+          }
+        : null,
     });
   }
   return activeRooms;
@@ -159,17 +167,21 @@ function getRoomsForRole(role, language = null) {
         return Boolean(room.candidateName) || room.state === "abandoned";
       }
       if (role === "super_admin") {
-        // Full rooms OR rooms in HR recovery mode or abandoned
-        return room.isFull || room.state === "hr_recovering" || room.state === "abandoned";
+        // Full rooms OR rooms in recovery modes or abandoned
+        return room.isFull || room.state === "hr_recovering" || room.state === "candidate_recovering" || room.state === "waiting_for_candidate" || room.state === "abandoned";
       }
       return false;
     })
     .sort((a, b) => {
-      // Critical (hr_recovering / abandoned) rooms surface first
-      if (a.state === "hr_recovering" && b.state !== "hr_recovering") return -1;
-      if (a.state !== "hr_recovering" && b.state === "hr_recovering") return 1;
-      if (a.state === "abandoned" && b.state !== "abandoned") return -1;
-      if (a.state !== "abandoned" && b.state === "abandoned") return 1;
+      const rank = (room) =>
+        room.state === "hr_recovering" ||
+        room.state === "candidate_recovering" ||
+        room.state === "waiting_for_candidate" ||
+        room.state === "abandoned"
+          ? 0
+          : 1;
+      const rankDiff = rank(a) - rank(b);
+      if (rankDiff !== 0) return rankDiff;
       return a.createdAt - b.createdAt;
     });
 }

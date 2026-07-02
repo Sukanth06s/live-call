@@ -1,27 +1,11 @@
 /**
  * Local socket test: candidate disconnect -> HR receives recovery ticks
  */
-const fs = require("fs");
-const path = require("path");
 const { io } = require("socket.io-client");
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
 
-const LOG_PATH = path.join(__dirname, "..", "debug-8e5ee0.log");
 const SOCKET_URL = process.env.SOCKET_URL || "http://localhost:3001";
-
-function log(hypothesisId, location, message, data) {
-  const entry = JSON.stringify({
-    sessionId: "8e5ee0",
-    hypothesisId,
-    location,
-    message,
-    data,
-    timestamp: Date.now(),
-    runId: "local-test",
-  });
-  fs.appendFileSync(LOG_PATH, entry + "\n");
-}
 
 function wait(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -83,8 +67,6 @@ async function main() {
   const candSocket = await connectSocket(candToken, "candidate");
   const hrSocket = await connectSocket(hrToken, "hr");
 
-  log("B", "test_candidate_recovery.js", "sockets connected", { candId: candSocket.id, hrId: hrSocket.id });
-
   let roomId = null;
   const hrEvents = [];
   hrSocket.on("candidate-recovering", (p) => hrEvents.push({ type: "recovering", ...p }));
@@ -104,8 +86,6 @@ async function main() {
     candSocket.emit("candidate-create-room", { userName: "Recovery Cand", language: "english" });
   });
 
-  log("B", "test_candidate_recovery.js", "candidate room created", { roomId });
-
   await new Promise((resolve, reject) => {
     hrSocket.once("join-ack", resolve);
     hrSocket.once("join-error", reject);
@@ -117,15 +97,6 @@ async function main() {
 
   await wait(3500);
 
-  log("C", "test_candidate_recovery.js", "hr events after candidate disconnect", {
-    roomId,
-    eventCount: hrEvents.length,
-    events: hrEvents.slice(0, 15),
-    hasRecovering: hrEvents.some((e) => e.type === "recovering"),
-    tickCount: hrEvents.filter((e) => e.type === "tick").length,
-    hasRoomStateRecovery: hrEvents.some((e) => e.type === "room-state"),
-  });
-
   console.log(JSON.stringify({ roomId, eventCount: hrEvents.length, hrEvents: hrEvents.slice(0, 10) }, null, 2));
 
   hrSocket.disconnect();
@@ -133,7 +104,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  log("B", "test_candidate_recovery.js", "test failed", { error: err.message });
   console.error(err);
   process.exit(1);
 });

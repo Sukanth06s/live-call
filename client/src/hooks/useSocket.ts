@@ -18,11 +18,11 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
   const roleRef = useRef<string>(typeof window !== "undefined" ? sessionStorage.getItem("intendedRole") || "candidate" : "candidate");
   const sessionTokenRef = useRef<string | undefined>(undefined);
   const roomStateVersionRef = useRef(0);
+  const [socketInstance, setSocketInstance] = useState<Socket | null>(null);
   const [socketId, setSocketId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [users, setUsers] = useState<RoomUser[]>([]);
   const [blocks, setBlocks] = useState<TranscriptBlock[]>([]);
-  const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
   const [roomState, setRoomState] = useState<InterviewState | null>(null);
   const [activeTranscriptionSession, setActiveTranscriptionSession] = useState<ActiveTranscriptionSession | null>(null);
   const [transcriptSaveStatus, setTranscriptSaveStatus] = useState<string | null>(null);
@@ -54,7 +54,6 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       setIsConnected(false);
       setUsers([]);
       setBlocks([]);
-      setCurrentRoomId(null);
       setRoomState(null);
       setActiveTranscriptionSession(null);
       setTranscriptSaveStatus(null);
@@ -75,8 +74,8 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     });
 
     socketRef.current = socket;
-
     socket.on("connect", () => {
+      setSocketInstance(socket);
       setIsConnected(true);
       setSocketId(socket.id ?? null);
       console.log("[Socket] Connected:", socket.id);
@@ -86,12 +85,8 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       }
     });
 
-    // NUCLEAR DEBUG: Log EVERY event that arrives
-    socket.onAny((event, ...args) => {
-      console.log(`[Socket EVENT]: ${event}`, args);
-    });
-
     socket.on("disconnect", () => {
+      setSocketInstance(null);
       setIsConnected(false);
       setSocketId(null);
       console.log("[Socket] Disconnected");
@@ -202,16 +197,10 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     // Candidate Recovery events
     socket.on("candidate-recovering", ({ message, remainingMs, deadline }: { message: string; remainingMs: number; deadline: number }) => {
       console.log("[Socket] candidate-recovering:", message, remainingMs);
-      // #region agent log
-      fetch('http://127.0.0.1:7702/ingest/dee3cf5d-b38e-4270-b181-d9f5b6a2165c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8e5ee0'},body:JSON.stringify({sessionId:'8e5ee0',location:'useSocket.ts:candidate-recovering',message:'recovery event received',data:{remainingMs,deadline,roomIdRef:roomIdRef.current},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
       setCandidateRecovery({ isRecovering: true, message, remainingMs, deadline, isTimeout: false });
     });
 
     socket.on("candidate-recovery-tick", ({ remainingMs }: { remainingMs: number }) => {
-      // #region agent log
-      if (remainingMs % 10000 < 1100 || remainingMs > 55000) fetch('http://127.0.0.1:7702/ingest/dee3cf5d-b38e-4270-b181-d9f5b6a2165c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8e5ee0'},body:JSON.stringify({sessionId:'8e5ee0',location:'useSocket.ts:candidate-recovery-tick',message:'tick received',data:{remainingMs,roomIdRef:roomIdRef.current},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
       setCandidateRecovery((prev) => {
         if (prev?.isRecovering) return { ...prev, remainingMs };
         return {
@@ -288,6 +277,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       socket.disconnect();
       if (socketRef.current === socket) {
         socketRef.current = null;
+        setSocketInstance(null);
       }
     };
   }, [onAuthError, sessionToken]);
@@ -307,7 +297,6 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
           socketRef.current?.off("join-error", onJoinError);
           roomIdRef.current = null;
           userNameRef.current = null;
-          setCurrentRoomId(null);
           reject(new Error(msg));
         };
 
@@ -328,7 +317,6 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       roleRef.current = role;
     }
     roomStateVersionRef.current = 0;
-    setCurrentRoomId(roomId);
 
     const ackPromise = waitForJoinAck(roomId);
     socketRef.current.emit("join-room", { roomId, userName, role: roleRef.current });
@@ -346,7 +334,6 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     socketRef.current.emit("candidate-create-room", { userName, language });
     const ack = await ackPromise;
     roomIdRef.current = ack.roomId;
-    setCurrentRoomId(ack.roomId);
     return ack.roomId;
   }, [waitForJoinAck]);
 
@@ -355,7 +342,6 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       roomIdRef.current = null;
       userNameRef.current = null;
       socketRef.current.emit("leave-room");
-      setCurrentRoomId(null);
       setUsers([]);
       setBlocks([]);
       setActiveTranscriptionSession(null);
@@ -394,7 +380,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
   }, []);
 
   return {
-    socket: socketRef.current,
+    socket: socketInstance,
     socketId,
     isConnected,
     users,

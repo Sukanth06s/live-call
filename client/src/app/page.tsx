@@ -114,7 +114,6 @@ export default function Home() {
     leaveChannel,
     toggleMute: agoraToggleMute,
     toggleVideo: agoraToggleVideo,
-    getLocalTrack,
     getCameraTrack,
     getMediaStream,
     isMuted,
@@ -205,22 +204,12 @@ export default function Home() {
     if (inRoom && userRole === "candidate" && activeTranscriptionSession?.isActive) {
       const stream = getMediaStream();
       if (stream) {
-        // Log Track State on Warm Startup
-        const localAudioTrack = getLocalTrack();
-        const mediaTrack = localAudioTrack?.getMediaStreamTrack();
-        console.log("[TRACK STATE - LIFECYCLE START]", {
-          id: mediaTrack?.id,
-          readyState: mediaTrack?.readyState,
-          muted: mediaTrack?.muted,
-          enabled: mediaTrack?.enabled
-        });
-
         startTranscription(stream);
       }
     } else {
       stopTranscription();
     }
-  }, [inRoom, userRole, activeTranscriptionSession?.isActive, getMediaStream, startTranscription, stopTranscription, getLocalTrack]);
+  }, [inRoom, userRole, activeTranscriptionSession?.isActive, getMediaStream, startTranscription, stopTranscription]);
 
   useEffect(() => {
     if (!socket) return;
@@ -283,13 +272,13 @@ export default function Home() {
 
         const resolvedRoomId =
           resolvedRole === "candidate"
-            ? await createCandidateRoom(newUserName, language || "english")
+            ? newRoomId || (await createCandidateRoom(newUserName, language || "english"))
             : newRoomId;
 
         setRoomId(resolvedRoomId);
         roomIdRef.current = resolvedRoomId;
 
-        if (resolvedRole !== "candidate") {
+        if (resolvedRole !== "candidate" || newRoomId) {
           await joinRoom(resolvedRoomId, newUserName, resolvedRole);
         }
 
@@ -371,17 +360,7 @@ export default function Home() {
   const handleToggleMute = useCallback(async () => {
     const newMuted = await agoraToggleMute();
     emitMuteToggle(roomId, newMuted);
-    
-    // Log Track State on Mute/Unmute toggle
-    const localAudioTrack = getLocalTrack();
-    const mediaTrack = localAudioTrack?.getMediaStreamTrack();
-    console.log("[TRACK STATE - MUTE TOGGLE]", {
-      id: mediaTrack?.id,
-      readyState: mediaTrack?.readyState,
-      muted: mediaTrack?.muted,
-      enabled: mediaTrack?.enabled
-    });
-  }, [agoraToggleMute, emitMuteToggle, roomId, getLocalTrack]);
+  }, [agoraToggleMute, emitMuteToggle, roomId]);
 
   const handleToggleVideo = useCallback(async () => {
     const newVideoEnabled = await agoraToggleVideo();
