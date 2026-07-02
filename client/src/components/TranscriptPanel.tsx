@@ -37,26 +37,6 @@ export default function TranscriptPanel({
   
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-
-  // Track session timer
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (isTranscribing) {
-      timer = setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
-    } else {
-      timer = setTimeout(() => setElapsedSeconds(0), 0);
-    }
-    return () => clearInterval(timer);
-  }, [isTranscribing]);
-
-  const formatElapsed = (sec: number) => {
-    const mins = Math.floor(sec / 60);
-    const secs = sec % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  };
 
   // Filter blocks to Candidate Blocks
   const candidateBlocks = blocks.filter(
@@ -209,17 +189,13 @@ export default function TranscriptPanel({
               </div>
             )}
 
-            {/* Core live stats indicators. Kept below controls to avoid timer/button collisions. */}
-            <div className="grid min-w-0 gap-2 border-t border-white/[0.04] pt-3 font-mono text-[9px] font-bold uppercase tracking-wider text-gray-500 min-[420px]:grid-cols-2 sm:text-[10px]">
+            {/* Core live status indicator. Kept below controls to avoid button collisions. */}
+            <div className="border-t border-white/[0.04] pt-3 font-mono text-[9px] font-bold uppercase tracking-wider text-gray-500 sm:text-[10px]">
               <span className="inline-flex h-8 min-w-0 items-center justify-center gap-1 rounded-full border border-white/[0.06] bg-white/[0.025] px-2">
                 Engine:
                 <span className={isTranscribing ? "text-emerald-400" : "text-gray-500"}>
                   {isTranscribing ? "Connected" : "Idle"}
                 </span>
-              </span>
-              <span className="inline-flex h-8 min-w-0 items-center justify-center gap-1 rounded-full border border-purple-500/15 bg-purple-500/10 px-2 text-purple-300">
-                Elapsed:
-                <span>{isTranscribing ? formatElapsed(elapsedSeconds) : "00:00"}</span>
               </span>
             </div>
           </div>
