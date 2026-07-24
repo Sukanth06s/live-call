@@ -39,9 +39,19 @@ const {
 } = require("./rooms");
 
 const app = express();
+console.log(typeof app);
 const server = http.createServer(app);
 
 const deepgram = createDeepgramClient(process.env.DEEPGRAM_API_KEY);
+
+console.log("===== DEEPGRAM DEBUG =====");
+console.log("Key exists:", !!process.env.DEEPGRAM_API_KEY);
+console.log("Key length:", process.env.DEEPGRAM_API_KEY?.length);
+console.log(
+  "Key prefix:",
+  process.env.DEEPGRAM_API_KEY?.substring(0, 8)
+);
+console.log("==========================");
 
 const io = new Server(server, {
   cors: {
