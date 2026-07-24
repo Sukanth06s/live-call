@@ -1970,6 +1970,12 @@ io.on("connection", (socket) => {
           try {
             console.log(`[Deepgram] Starting live transcription for room ${roomId}`);
             const dgConnection = deepgram.listen.live({ model: "nova-2", smart_format: true, encoding: "linear16", sample_rate: 16000 });
+            console.log("Deepgram object:", deepgram);
+            console.log("listen:", deepgram.listen);
+            console.log("listen.live:", deepgram.listen?.live);
+            
+            console.log("Deepgram connection object:", dgConnection);
+            console.log("Connection constructor:", dgConnection?.constructor?.name);
             dgState.dgConnection = dgConnection;
             setupDeepgramEvents(dgConnection, roomId, activeRoom.candidateUser?.name || "Candidate", activeRoom.candidateUser?.id, "candidate");
           } catch (err) {
