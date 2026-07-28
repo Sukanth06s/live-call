@@ -39,19 +39,15 @@ const {
 } = require("./rooms");
 
 const app = express();
-console.log(typeof app);
 const server = http.createServer(app);
 
 const deepgram = createDeepgramClient(process.env.DEEPGRAM_API_KEY);
+const deepgramModel = process.env.DEEPGRAM_MODEL || "nova-3";
+const deepgramLanguage = process.env.DEEPGRAM_LANGUAGE || "en-US";
 
-console.log("===== DEEPGRAM DEBUG =====");
-console.log("Key exists:", !!process.env.DEEPGRAM_API_KEY);
-console.log("Key length:", process.env.DEEPGRAM_API_KEY?.length);
-console.log(
-  "Key prefix:",
-  process.env.DEEPGRAM_API_KEY?.substring(0, 8)
-);
-console.log("==========================");
+if (!process.env.DEEPGRAM_API_KEY) {
+  console.warn("[Deepgram] DEEPGRAM_API_KEY is not configured. Live transcription will fail until it is set.");
+}
 
 const io = new Server(server, {
   cors: {
@@ -774,6 +770,22 @@ function stopTranscriptionForRoom(roomId, { emitStopped = true } = {}) {
   if (emitStopped) io.to(roomId).emit("transcription-stopped");
   broadcastProjectedRoomState(roomId);
   return true;
+}
+
+function markTranscriptionUnavailable(roomId, message = "Live transcription is unavailable. Please try starting transcription again.") {
+  const room = getRoom(roomId);
+  if (!room) return;
+
+  clearCountdown(roomId);
+  room.state = "paused";
+  room.activeTranscriptionSession.isActive = false;
+  room.activeTranscriptionSession.startedAt = null;
+  finalizeAllActiveSpeakers(roomId);
+  clearSpeakerTimeouts(roomId);
+
+  io.to(roomId).emit("transcription-stopped");
+  io.to(roomId).emit("transcript-save-error", message);
+  broadcastProjectedRoomState(roomId);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2126,14 +2138,19 @@ io.on("connection", (socket) => {
           dgState.isDeepgramConnecting = true;
           dgState.audioQueue = [];
           try {
-            console.log(`[Deepgram] Starting live transcription for room ${roomId}`);
-            const dgConnection = deepgram.listen.live({ model: "nova-2", smart_format: true, encoding: "linear16", sample_rate: 16000 });
-            console.log("Deepgram object:", deepgram);
-            console.log("listen:", deepgram.listen);
-            console.log("listen.live:", deepgram.listen?.live);
-            
-            console.log("Deepgram connection object:", dgConnection);
-            console.log("Connection constructor:", dgConnection?.constructor?.name);
+            console.log(`[Deepgram] Starting live transcription for room ${roomId} using model ${deepgramModel}`);
+            const dgConnection = deepgram.listen.live({
+              model: deepgramModel,
+              language: deepgramLanguage,
+              smart_format: true,
+              punctuate: true,
+              encoding: "linear16",
+              sample_rate: 16000,
+              channels: 1,
+              interim_results: true,
+              endpointing: 300,
+              vad_events: true,
+            });
             dgState.dgConnection = dgConnection;
             setupDeepgramEvents(dgConnection, roomId, activeRoom.candidateUser?.name || "Candidate", activeRoom.candidateUser?.id, "candidate");
           } catch (err) {
@@ -2361,19 +2378,28 @@ io.on("connection", (socket) => {
       }
     });
 
-    dg.on(LiveTranscriptionEvents.Close, () => {
-      console.log(`[Deepgram] Connection closed for room: ${roomId}`);
+    dg.on(LiveTranscriptionEvents.Close, (event) => {
+      const closeCode = event?.code ?? event?.target?.readyState ?? "unknown";
+      const closeReason = event?.reason || event?.message || "No close reason provided";
+      console.log(`[Deepgram] Connection closed for room ${roomId}. code=${closeCode}; reason=${closeReason}`);
       const dgState = activeDeepgramConnections.get(roomId);
       if (dgState?.dgConnection === dg) {
         activeDeepgramConnections.delete(roomId);
+        markTranscriptionUnavailable(roomId);
       }
     });
 
     dg.on(LiveTranscriptionEvents.Error, (err) => {
-      console.error(`[Deepgram] Connection error for room ${roomId}:`, err);
+      const details = {
+        message: err?.message || err?.error?.message || err?.type || "Unknown Deepgram websocket error",
+        code: err?.code || err?.error?.code || err?.target?.readyState,
+        status: err?.status || err?.error?.status,
+      };
+      console.error(`[Deepgram] Connection error for room ${roomId}:`, details);
       const dgState = activeDeepgramConnections.get(roomId);
       if (dgState?.dgConnection === dg) {
         activeDeepgramConnections.delete(roomId);
+        markTranscriptionUnavailable(roomId);
       }
     });
   }
