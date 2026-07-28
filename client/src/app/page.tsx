@@ -9,11 +9,20 @@ import { useDeepgram } from "@/hooks/useDeepgram";
 
 import { supabase } from "@/lib/supabase";
 import { Session } from "@supabase/supabase-js";
-import { RoomLanguage, UserRole } from "@/types";
+import { CandidatePortfolioState, RoomLanguage, UserRole } from "@/types";
 
 // Dynamic imports to avoid SSR issues with browser-only APIs
 const Lobby = dynamic(() => import("@/components/Lobby"), { ssr: false });
 const RoomPage = dynamic(() => import("@/components/RoomPage"), { ssr: false });
+const CandidatePortfolio = dynamic(() => import("@/components/CandidatePortfolio"), { ssr: false });
+
+function getSocketUrl() {
+  let socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
+  if (socketUrl && !socketUrl.startsWith("http://") && !socketUrl.startsWith("https://")) {
+    socketUrl = `https://${socketUrl}`;
+  }
+  return socketUrl;
+}
 
 function getJoinErrorMessage(err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
@@ -42,6 +51,8 @@ export default function Home() {
   const [profileLanguage, setProfileLanguage] = useState<RoomLanguage>("english");
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [loadedProfileToken, setLoadedProfileToken] = useState<string | null>(null);
+  const [candidatePortfolio, setCandidatePortfolio] = useState<CandidatePortfolioState | null>(null);
+  const [loadingCandidatePortfolio, setLoadingCandidatePortfolio] = useState(false);
   
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -95,6 +106,7 @@ export default function Home() {
     transcriptionCountdown,
     hrRecovery,
     candidateRecovery,
+    hrRecordingCandidate,
     joinRoom,
     createCandidateRoom,
     leaveRoom: socketLeaveRoom,
@@ -124,6 +136,34 @@ export default function Home() {
 
   const roomIdRef = useRef("");
 
+  const loadCandidatePortfolio = useCallback(async () => {
+    if (!accessToken || authorizedRole !== "candidate") {
+      setCandidatePortfolio(null);
+      return;
+    }
+
+    setLoadingCandidatePortfolio(true);
+    try {
+      const res = await fetch(`${getSocketUrl()}/api/candidate/portfolio`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      if (res.status === 401) {
+        await handleInvalidSession("Your session has expired. Please sign in again.");
+        return;
+      }
+      if (!res.ok) throw new Error("Unable to load candidate portfolio");
+      const data = (await res.json()) as CandidatePortfolioState;
+      setCandidatePortfolio(data);
+    } catch (err) {
+      console.warn("[CandidatePortfolio] Failed to load:", err);
+      setCandidatePortfolio(null);
+    } finally {
+      setLoadingCandidatePortfolio(false);
+    }
+  }, [accessToken, authorizedRole, handleInvalidSession]);
+
   const {
     startTranscription,
     stopTranscription,
@@ -148,11 +188,7 @@ export default function Home() {
       setUserRole("candidate");
       sessionStorage.setItem("intendedRole", "candidate");
       try {
-        let socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
-        if (socketUrl && !socketUrl.startsWith("http://") && !socketUrl.startsWith("https://")) {
-          socketUrl = `https://${socketUrl}`;
-        }
-        const res = await fetch(`${socketUrl}/api/me`, {
+        const res = await fetch(`${getSocketUrl()}/api/me`, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },
@@ -175,6 +211,9 @@ export default function Home() {
           setProfileLanguage(resolvedLanguage);
           setUserRole(resolvedRole);
           setUserName(displayName);
+          if (resolvedRole !== "candidate") {
+            setCandidatePortfolio(null);
+          }
           sessionStorage.setItem("intendedRole", resolvedRole);
           setLoadedProfileToken(accessToken);
         }
@@ -197,6 +236,16 @@ export default function Home() {
       isCancelled = true;
     };
   }, [accessToken, handleInvalidSession, sessionEmail]);
+
+  useEffect(() => {
+    if (!accessToken || inRoom || loadingProfile || loadedProfileToken !== accessToken) return;
+    if (authorizedRole !== "candidate") return;
+
+    const timeout = window.setTimeout(() => {
+      void loadCandidatePortfolio();
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [accessToken, authorizedRole, inRoom, loadedProfileToken, loadingProfile, loadCandidatePortfolio]);
 
   // 1. Candidate-only Transcription Lifecycle
   // Only the candidate streams PCM to Deepgram; HR and Super Admin stay on Agora audio/video only.
@@ -286,14 +335,10 @@ export default function Home() {
         let agoraUid: number | undefined;
         if (!agoraToken) {
           try {
-            let socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
-            if (socketUrl && !socketUrl.startsWith("http://") && !socketUrl.startsWith("https://")) {
-              socketUrl = `https://${socketUrl}`;
-            }
             const params = new URLSearchParams({
               channelName: resolvedRoomId,
             });
-            const res = await fetch(`${socketUrl}/api/token?${params.toString()}`, {
+            const res = await fetch(`${getSocketUrl()}/api/token?${params.toString()}`, {
               headers: {
                 Authorization: `Bearer ${accessToken}`,
               },
@@ -389,6 +434,27 @@ export default function Home() {
     return null;
   }
 
+  if (!inRoom && authorizedRole === "candidate" && loadingCandidatePortfolio) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#07070a]">
+        <div className="w-12 h-12 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!inRoom && authorizedRole === "candidate" && candidatePortfolio?.portfolioReady) {
+    return (
+      <CandidatePortfolio
+        portfolio={candidatePortfolio}
+        candidateName={userName || sessionEmail?.split("@")[0] || "Candidate"}
+        onSignOut={() => {
+          sessionStorage.removeItem("intendedRole");
+          void supabase.auth.signOut();
+        }}
+      />
+    );
+  }
+
   if (!inRoom) {
     return (
       <>
@@ -439,6 +505,7 @@ export default function Home() {
       transcriptionCountdown={transcriptionCountdown}
       hrRecovery={hrRecovery}
       candidateRecovery={candidateRecovery}
+      hrRecordingCandidate={hrRecordingCandidate}
       onToggleMute={handleToggleMute}
       onToggleVideo={handleToggleVideo}
       onLeaveRoom={handleLeaveRoom}

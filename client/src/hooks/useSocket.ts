@@ -42,6 +42,10 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     deadline: number;
     isTimeout: boolean;
   } | null>(null);
+  const [hrRecordingCandidate, setHrRecordingCandidate] = useState<{
+    isRecording: boolean;
+    hrName?: string;
+  }>({ isRecording: false });
 
   useEffect(() => {
     if (!sessionToken) return;
@@ -61,6 +65,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       setTranscriptionCountdown(null);
       setHrRecovery(null);
       setCandidateRecovery(null);
+      setHrRecordingCandidate({ isRecording: false });
       roomStateVersionRef.current = 0;
     }
 
@@ -177,6 +182,11 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     socket.on("interview-ended", () => {
       setIsTranscriptionChanging(false);
       setTranscriptionCountdown(null);
+      setHrRecordingCandidate({ isRecording: false });
+    });
+
+    socket.on("hr-recording-state", ({ isRecording, hrName }: { isRecording: boolean; hrName?: string }) => {
+      setHrRecordingCandidate({ isRecording: Boolean(isRecording), hrName });
     });
 
     // HR Recovery events
@@ -350,6 +360,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
       setTranscriptionCountdown(null);
       setHrRecovery(null);
       setCandidateRecovery(null);
+      setHrRecordingCandidate({ isRecording: false });
       roomStateVersionRef.current = 0;
     }
   }, []);
@@ -392,6 +403,7 @@ export function useSocket(sessionToken?: string, onAuthError?: (message: string)
     transcriptionCountdown,
     hrRecovery,
     candidateRecovery,
+    hrRecordingCandidate,
     joinRoom,
     createCandidateRoom,
     leaveRoom,

@@ -552,6 +552,140 @@ async function buildCandidateVideoState(room, requestor) {
   };
 }
 
+async function buildCandidatePortfolio(candidateUserId) {
+  const emptyState = {
+    portfolioReady: false,
+    reason: "Candidate portfolio is not ready yet.",
+    verification: null,
+    video: null,
+    transcript: null,
+  };
+
+  const { data: verification, error: verError } = await supabaseAdmin
+    .from("candidate_verification")
+    .select("*")
+    .eq("candidate_user_id", candidateUserId)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (verError) throw verError;
+  if (!verification) {
+    return {
+      ...emptyState,
+      reason: "Candidate verification has not been approved yet.",
+    };
+  }
+
+  const { data: video, error: videoError } = await supabaseAdmin
+    .from("candidate_videos")
+    .select("*")
+    .eq("id", verification.video_id)
+    .single();
+
+  if (videoError) throw videoError;
+
+  let interview = null;
+  if (video?.interview_id) {
+    const { data, error } = await supabaseAdmin
+      .from("interviews")
+      .select("id, room_id, hr_user_id, candidate_user_id, candidate_name_snapshot, hr_name_snapshot, status, ended_reason, final_transcript, started_at, ended_at")
+      .eq("id", video.interview_id)
+      .maybeSingle();
+    if (error) throw error;
+    interview = data;
+  }
+
+  if (!interview) {
+    const { data, error } = await supabaseAdmin
+      .from("interviews")
+      .select("id, room_id, hr_user_id, candidate_user_id, candidate_name_snapshot, hr_name_snapshot, status, ended_reason, final_transcript, started_at, ended_at")
+      .eq("candidate_user_id", candidateUserId)
+      .eq("status", "completed")
+      .eq("ended_reason", "hr_ended")
+      .order("ended_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    interview = data;
+  }
+
+  const wasAdjournedByHr =
+    interview?.status === "completed" &&
+    interview?.ended_reason === "hr_ended";
+
+  if (!wasAdjournedByHr) {
+    return {
+      ...emptyState,
+      reason: "Verification was approved, but the interview was not adjourned by HR.",
+      verification: {
+        approvedByHrName: verification.approved_by_hr_name_snapshot,
+        approvedAt: verification.approved_at,
+      },
+    };
+  }
+
+  let signedUrl = null;
+  try {
+    signedUrl = await createSignedVideoUrl(video);
+  } catch (err) {
+    console.warn("[CandidatePortfolio] Could not create signed playback URL:", err.message);
+  }
+
+  return {
+    portfolioReady: true,
+    reason: null,
+    verification: {
+      approvedByHrName: verification.approved_by_hr_name_snapshot,
+      approvedAt: verification.approved_at,
+    },
+    video: mapVideoForClient(video, signedUrl),
+    transcript: {
+      interviewId: interview.id,
+      content: interview.final_transcript || "",
+      savedAt: interview.ended_at,
+      hrName: interview.hr_name_snapshot || verification.approved_by_hr_name_snapshot || "HR",
+      candidateName: interview.candidate_name_snapshot || null,
+    },
+  };
+}
+
+async function rollbackUnadjournedVerification(room) {
+  const candidateUser = room?.candidateUser || room?.lastCandidateUser;
+  if (!candidateUser?.authUserId || !room?.interviewSessionId) return;
+
+  const { data: verification, error: verError } = await supabaseAdmin
+    .from("candidate_verification")
+    .select("candidate_user_id, video_id")
+    .eq("candidate_user_id", candidateUser.authUserId)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (verError) throw verError;
+  if (!verification?.video_id) return;
+
+  const { data: video, error: videoError } = await supabaseAdmin
+    .from("candidate_videos")
+    .select("id, interview_id, status")
+    .eq("id", verification.video_id)
+    .maybeSingle();
+
+  if (videoError) throw videoError;
+  if (video?.interview_id !== room.interviewSessionId || video.status !== "anr") return;
+
+  const now = new Date().toISOString();
+  const deleteResult = await supabaseAdmin
+    .from("candidate_verification")
+    .delete()
+    .eq("candidate_user_id", candidateUser.authUserId);
+  if (deleteResult.error) throw deleteResult.error;
+
+  const updateResult = await supabaseAdmin
+    .from("candidate_videos")
+    .update({ status: "archived", updated_at: now, dismissed_at: now })
+    .eq("id", verification.video_id);
+  if (updateResult.error) throw updateResult.error;
+}
+
 async function emitCandidateVideoState(roomId) {
   const room = getRoom(roomId);
   if (!room) return;
@@ -916,6 +1050,7 @@ async function executeFinalTeardown(roomId, lastHrSocket, { reason = "hr-disconn
     ? "The interview has ended."
     : "The interviewer did not reconnect in time. The session has closed.";
 
+  io.to(roomId).emit("hr-recording-state", { roomId, isRecording: false });
   io.to(roomId).emit("room-closed", closedMessage);
 
   const hasTranscript = (room.blocks || []).some(b => (b.content || "").trim());
@@ -936,6 +1071,9 @@ async function executeFinalTeardown(roomId, lastHrSocket, { reason = "hr-disconn
         reason: closedReason,
         finalTranscript: "",
       });
+    }
+    if (!intentional) {
+      await rollbackUnadjournedVerification(room);
     }
   } catch (err) {
     console.error("[DB Error] executeFinalTeardown persistence failed:", err);
@@ -1324,6 +1462,26 @@ app.get("/api/candidate/recovery-room", async (req, res) => {
     });
   } catch (err) {
     sendApiError(res, err, "Could not check candidate recovery room");
+  }
+});
+
+app.get("/api/candidate/portfolio", async (req, res) => {
+  try {
+    const { user, profile } = await getAuthenticatedRequestContext(req);
+    if (profile.role !== "candidate") {
+      return res.json({
+        portfolioReady: false,
+        reason: "Portfolio display is available for candidate accounts only.",
+        verification: null,
+        video: null,
+        transcript: null,
+      });
+    }
+
+    const portfolio = await buildCandidatePortfolio(user.id);
+    res.json(portfolio);
+  } catch (err) {
+    sendApiError(res, err, "Could not load candidate portfolio");
   }
 });
 
@@ -2075,6 +2233,19 @@ io.on("connection", (socket) => {
       console.error("[DB Error] Manual transcript save failed:", err);
       socket.emit("transcript-save-error", "Could not save transcript.");
     }
+  });
+
+  socket.on("hr-recording-state", ({ roomId, isRecording }) => {
+    if (!isSocketInRoom(socket, roomId)) return;
+    if (socket.data.role !== "hr") return;
+    const room = getRoom(roomId);
+    if (!room) return;
+
+    io.to(roomId).emit("hr-recording-state", {
+      roomId,
+      isRecording: Boolean(isRecording),
+      hrName: room.hrUser?.name || socket.data.displayName || "HR",
+    });
   });
 
   // STRICT PCM ROUTING AUTHORITY

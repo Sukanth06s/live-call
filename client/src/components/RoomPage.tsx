@@ -57,6 +57,10 @@ interface RoomPageProps {
     deadline: number;
     isTimeout: boolean;
   } | null;
+  hrRecordingCandidate?: {
+    isRecording: boolean;
+    hrName?: string;
+  };
   onToggleMute: () => void;
   onToggleVideo: () => void;
   onLeaveRoom: () => void;
@@ -100,6 +104,7 @@ export default function RoomPage({
   transcriptionCountdown = null,
   hrRecovery = null,
   candidateRecovery = null,
+  hrRecordingCandidate = { isRecording: false },
   onToggleMute,
   onToggleVideo,
   onLeaveRoom,
@@ -122,6 +127,7 @@ export default function RoomPage({
   const resolvedRole = userRole || currentUser?.role || "candidate";
   const isHr = resolvedRole === "hr";
   const isSuperAdmin = resolvedRole === "super_admin";
+  const isCandidate = resolvedRole === "candidate";
 
   const showCandidateRecoveryBanner =
     (isHr || isSuperAdmin) &&
@@ -522,6 +528,27 @@ export default function RoomPage({
       </AnimatePresence>
 
       {/* ── Candidate Recovery Banner (HR / Admin) ── */}
+      <AnimatePresence>
+        {isCandidate && hrRecordingCandidate.isRecording && (
+          <motion.div
+            key="hr-recording-notice"
+            initial={{ y: -100, opacity: 0, x: "-50%" }}
+            animate={{ y: 0, opacity: 1, x: "-50%" }}
+            exit={{ y: -100, opacity: 0, x: "-50%" }}
+            transition={{ type: "spring", stiffness: 400, damping: 32 }}
+            className="fixed left-1/2 top-6 z-[105] flex w-[90%] max-w-xl items-center gap-3 rounded-2xl border border-red-500/35 bg-red-500/15 px-5 py-4 text-sm font-semibold text-red-100 shadow-[0_10px_40px_-10px_rgba(239,68,68,0.45)] backdrop-blur-md sm:w-auto sm:min-w-[420px]"
+          >
+            <span className="relative flex h-3 w-3 shrink-0">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+              <span className="relative inline-flex h-3 w-3 rounded-full bg-red-500" />
+            </span>
+            <span>
+              {hrRecordingCandidate.hrName || "HR"} is recording your verification video.
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {showCandidateRecoveryBanner && (
           <motion.div

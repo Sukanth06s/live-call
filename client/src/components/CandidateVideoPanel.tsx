@@ -65,7 +65,7 @@ function formatToIST(isoString?: string | null) {
       minute: "2-digit",
       hour12: true,
     }) + " IST";
-  } catch (err) {
+  } catch {
     return isoString || "";
   }
 }
@@ -216,10 +216,13 @@ export default function CandidateVideoPanel({
 
   const stopRecording = useCallback((discard = false) => {
     const recorder = recorderRef.current;
-    if (!recorder || recorder.state === "inactive") return;
+    if (!recorder || recorder.state === "inactive") {
+      socket?.emit?.("hr-recording-state", { roomId, isRecording: false });
+      return;
+    }
     discardRecordingRef.current = discard;
     recorder.stop();
-  }, []);
+  }, [roomId, socket]);
 
   useEffect(() => {
     const candidateStillPresent = users.some((user) => user.role === "candidate");
@@ -343,6 +346,7 @@ export default function CandidateVideoPanel({
       if (event.data.size > 0) chunksRef.current.push(event.data);
     };
     recorder.onstop = () => {
+      socket?.emit?.("hr-recording-state", { roomId, isRecording: false });
       recorderRef.current = null;
       recordingStartedAtRef.current = null;
       if (discardRecordingRef.current) {
@@ -360,6 +364,7 @@ export default function CandidateVideoPanel({
     };
 
     recorder.start(1000);
+    socket?.emit?.("hr-recording-state", { roomId, isRecording: true });
     setRecordingState("recording");
   };
 
@@ -631,7 +636,7 @@ export default function CandidateVideoPanel({
               type="button"
               onClick={() => {
                 if (window.confirm("Are you sure you want to reset the current video upload?")) {
-                  resettableVideo && void cancelUpload(resettableVideo.id);
+                  if (resettableVideo) void cancelUpload(resettableVideo.id);
                 }
               }}
               className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-200 transition hover:bg-amber-500/20"

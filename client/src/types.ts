@@ -112,3 +112,20 @@ export interface CandidateVideoState {
     approvedAt: string;
   } | null;
 }
+
+export interface CandidatePortfolioState {
+  portfolioReady: boolean;
+  reason?: string | null;
+  verification?: {
+    approvedByHrName?: string | null;
+    approvedAt?: string | null;
+  } | null;
+  video?: CandidateVideo | null;
+  transcript?: {
+    interviewId: string;
+    content: string;
+    savedAt?: string | null;
+    hrName?: string | null;
+    candidateName?: string | null;
+  } | null;
+}
