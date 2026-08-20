@@ -93,6 +93,33 @@ function getEmailPrefix(email, fallback = "User") {
   return email?.split("@")[0] || fallback;
 }
 
+function normalizeEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+async function findAuthUserByEmail(email) {
+  const normalizedEmail = normalizeEmail(email);
+  let page = 1;
+  const perPage = 1000;
+
+  while (page <= 20) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+
+    const users = data?.users || [];
+    const found = users.find((user) => normalizeEmail(user.email) === normalizedEmail);
+    if (found) return found;
+    if (users.length < perPage) return null;
+    page += 1;
+  }
+
+  return null;
+}
+
 async function getUserProfile(user) {
   const { data, error } = await supabaseAdmin
     .from("profiles")
@@ -1374,6 +1401,79 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", message: "Live Room Server Running" });
 });
 
+app.post("/api/auth/candidate-signup", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const password = String(req.body?.password || "");
+    const displayName = String(req.body?.displayName || "").trim() || getEmailPrefix(email, "Candidate");
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters." });
+    }
+
+    const existingUser = await findAuthUserByEmail(email);
+    if (existingUser) {
+      return res.status(409).json({ error: "An account with this email already exists. Please sign in instead." });
+    }
+
+    const { data: created, error: createError } = await supabaseAdmin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        display_name: displayName,
+        role: "candidate",
+      },
+    });
+
+    if (createError) {
+      const message = String(createError.message || "");
+      if (/already|duplicate|registered|exists/i.test(message)) {
+        return res.status(409).json({ error: "An account with this email already exists. Please sign in instead." });
+      }
+      throw createError;
+    }
+
+    const userId = created?.user?.id;
+    if (!userId) throw new Error("Candidate account was not created.");
+
+    const { error: profileError } = await supabaseAdmin
+      .from("profiles")
+      .insert([{
+        user_id: userId,
+        role: "candidate",
+        language: "english",
+        display_name: displayName,
+        updated_at: new Date().toISOString(),
+      }]);
+
+    if (profileError) {
+      try {
+        await supabaseAdmin.auth.admin.deleteUser(userId);
+      } catch (cleanupErr) {
+        console.error("[Signup] Could not clean up auth user after profile insert failure:", cleanupErr);
+      }
+      throw profileError;
+    }
+
+    res.status(201).json({
+      user: {
+        id: userId,
+        email,
+        role: "candidate",
+        displayName,
+        language: "english",
+      },
+    });
+  } catch (err) {
+    sendApiError(res, err, "Could not create candidate account");
+  }
+});
+
 app.get("/api/me", async (req, res) => {
   const token = getBearerToken(req);
   if (!token) return res.status(401).json({ error: "No token provided" });
@@ -2305,6 +2405,11 @@ io.on("connection", (socket) => {
     });
 
     dg.on(LiveTranscriptionEvents.Transcript, (data) => {
+
+
+
+
+
       const transcript = data.channel.alternatives[0].transcript;
       if (transcript && transcript.trim() && roomId) {
         const isFinal = data.is_final === true || data.speech_final === true;
@@ -2345,10 +2450,17 @@ io.on("connection", (socket) => {
             block.segments = [...buffer.committedSegments, buffer.liveSegment];
           } else {
             buffer.committedSegments.push({ text: transcript.trim(), isFinal, timestamp: Date.now() });
+            console.log("Committed Segments:");
+            buffer.committedSegments.forEach((s, i) => {
+                console.log(i, JSON.stringify(s.text));
+            });
             buffer.liveSegment = null;
             block.segments = buffer.committedSegments;
           }
 
+          console.log("================================");
+          console.log("FINAL:", isFinal);
+          console.log("TEXT:", transcript.trim());
           block.content = block.segments.map(s => s.text).join(" ");
           block.updatedAt = Date.now();
           block.version += 1;
