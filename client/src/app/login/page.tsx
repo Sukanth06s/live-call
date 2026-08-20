@@ -27,6 +27,8 @@ export default function LoginPage() {
   });
 
   const isSignup = mode === "signup";
+  const emailInputId = isSignup ? "candidate-signup-email" : "login-email";
+  const passwordInputId = isSignup ? "candidate-signup-password" : "login-password";
 
   useEffect(() => {
     sessionStorage.removeItem("authNotice");
@@ -178,7 +180,7 @@ export default function LoginPage() {
           <form onSubmit={isSignup ? handleCandidateSignup : handleLogin} className="space-y-5">
             {isSignup && (
               <div className="space-y-1.5">
-                <label className="block select-none text-[11px] font-bold uppercase tracking-wider text-gray-500">Display Name</label>
+                <label htmlFor="candidate-signup-display-name" className="block select-none text-[11px] font-bold uppercase tracking-wider text-gray-500">Display Name</label>
                 <div className="relative flex items-center">
                   <span className="absolute left-3 text-gray-500">
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -186,9 +188,11 @@ export default function LoginPage() {
                     </svg>
                   </span>
                   <input
+                    id="candidate-signup-display-name"
                     type="text"
                     value={displayName}
                     onChange={(e) => setDisplayName(e.target.value)}
+                    autoComplete="name"
                     className="w-full rounded-xl border border-white/[0.07] bg-[#07070a]/50 py-3 pl-10 pr-4 text-sm font-medium text-white placeholder-gray-600 transition-all focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/20"
                     placeholder="Your name"
                   />
@@ -197,7 +201,7 @@ export default function LoginPage() {
             )}
 
             <div className="space-y-1.5">
-              <label className="block select-none text-[11px] font-bold uppercase tracking-wider text-gray-500">Email</label>
+              <label htmlFor={emailInputId} className="block select-none text-[11px] font-bold uppercase tracking-wider text-gray-500">Email</label>
               <div className="relative flex items-center">
                 <span className="absolute left-3 text-gray-500">
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -205,10 +209,12 @@ export default function LoginPage() {
                   </svg>
                 </span>
                 <input
+                  id={emailInputId}
                   type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
                   className={`w-full rounded-xl border border-white/[0.07] bg-[#07070a]/50 py-3 pl-10 pr-4 text-sm font-medium text-white placeholder-gray-600 transition-all focus:outline-none ${
                     isSignup ? "focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20" : "focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20"
                   }`}
@@ -218,7 +224,7 @@ export default function LoginPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label className="block select-none text-[11px] font-bold uppercase tracking-wider text-gray-500">Password</label>
+              <label htmlFor={passwordInputId} className="block select-none text-[11px] font-bold uppercase tracking-wider text-gray-500">Password</label>
               <div className="relative flex items-center">
                 <span className="absolute left-3 text-gray-500">
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -226,10 +232,12 @@ export default function LoginPage() {
                   </svg>
                 </span>
                 <input
+                  id={passwordInputId}
                   type="password"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  autoComplete={isSignup ? "new-password" : "current-password"}
                   className={`w-full rounded-xl border border-white/[0.07] bg-[#07070a]/50 py-3 pl-10 pr-4 text-sm font-medium text-white placeholder-gray-600 transition-all focus:outline-none ${
                     isSignup ? "focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20" : "focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20"
                   }`}
@@ -240,7 +248,7 @@ export default function LoginPage() {
 
             {isSignup && (
               <div className="space-y-1.5">
-                <label className="block select-none text-[11px] font-bold uppercase tracking-wider text-gray-500">Confirm Password</label>
+                <label htmlFor="candidate-signup-confirm-password" className="block select-none text-[11px] font-bold uppercase tracking-wider text-gray-500">Confirm Password</label>
                 <div className="relative flex items-center">
                   <span className="absolute left-3 text-gray-500">
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -248,10 +256,12 @@ export default function LoginPage() {
                     </svg>
                   </span>
                   <input
+                    id="candidate-signup-confirm-password"
                     type="password"
                     required
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
+                    autoComplete="new-password"
                     className="w-full rounded-xl border border-white/[0.07] bg-[#07070a]/50 py-3 pl-10 pr-4 text-sm font-medium text-white placeholder-gray-600 transition-all focus:border-emerald-500/50 focus:outline-none focus:ring-1 focus:ring-emerald-500/20"
                     placeholder="Confirm password"
                   />
