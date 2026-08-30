@@ -38,7 +38,8 @@ export default function TranscriptPanel({
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
 
-  // Filter blocks to Candidate Blocks
+  // Restored history is rendered as plain final text, then fresh live
+  // transcription appends after it in the same visible transcript.
   const candidateBlocks = blocks.filter(
     (b) => b.speakerRole === "candidate" || (!b.speakerRole && b.speakerName !== "HR" && b.speakerName !== "Interviewer")
   );
@@ -259,7 +260,7 @@ export default function TranscriptPanel({
                   <div>
                     <AnimatePresence initial={false} mode="popLayout">
                       {candidateBlocks.map((block) => {
-                        const isLive = block.status === "live";
+                        const isLive = !block.restoredFromHistory && block.status === "live";
                         return (
                           <motion.span
                             layout
@@ -272,7 +273,9 @@ export default function TranscriptPanel({
                                 : "text-gray-300 hover:text-white"
                             }`}
                           >
-                            {block.segments && block.segments.length > 0 ? (
+                            {block.restoredFromHistory ? (
+                              block.content
+                            ) : block.segments && block.segments.length > 0 ? (
                               block.segments.map((seg, sIdx) => {
                                 const isLowConfidence = !isLive && seg.isFinal && seg.confidence !== undefined && seg.confidence < 0.75;
                                 return (

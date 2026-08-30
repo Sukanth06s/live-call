@@ -31,7 +31,7 @@ function createRoom(roomId, language = "english") {
       roomStateVersion: 0,
 
       blocks: [],                 // Array of TranscriptBlocks
-      activeSpeakers: new Map(),  // userName -> { blockId, committedSegments, liveSegment }
+      activeSpeakers: new Map(),  // userName -> { blockId, committedText, liveText }
       createdAt: Date.now(),
 
       hrRecovery: {
@@ -335,6 +335,16 @@ function finalizeAllActiveSpeakers(roomId) {
     for (const [userName, buffer] of room.activeSpeakers) {
       const block = room.blocks.find(b => b.id === buffer.blockId);
       if (block) {
+        const committedText = String(buffer.committedText || "").trim();
+        const liveText = String(buffer.liveText || "").trim();
+        if ((committedText || liveText) && !block.restoredFromHistory) {
+          block.content = [committedText, liveText].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+          block.segments = block.content
+            ? [{ text: block.content, isFinal: true, timestamp: Date.now(), confidence: 1.0 }]
+            : [];
+        } else if (Array.isArray(block.segments)) {
+          block.segments = block.segments.map(segment => ({ ...segment, isFinal: true }));
+        }
         block.status = "final";
         block.isLive = false;
         block.isFinal = true;

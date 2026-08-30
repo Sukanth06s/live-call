@@ -66,6 +66,7 @@ app.use(express.json());
 const speakerTimeouts = new Map();
 const activeDeepgramConnections = new Map(); // roomId -> { dgConnection, isDeepgramConnecting, isDgOpen, audioQueue }
 const transcriptionCountdowns = new Map(); // roomId -> countdown interval
+const transcriptPersistLocks = new Map(); // roomId -> active persistence promise
 const hrRecoveryTimers = new Map(); // roomId → { timerId, tickId } — cancellable HR-disconnect recovery
 const candidateRecoveryTimers = new Map(); // roomId → { timerId, tickId }
 const abandonedRecoveryTimers = new Map(); // roomId → { timerId }
@@ -815,6 +816,119 @@ function markTranscriptionUnavailable(roomId, message = "Live transcription is u
   broadcastProjectedRoomState(roomId);
 }
 
+function normalizeTranscriptText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function comparableTranscriptToken(value) {
+  return normalizeTranscriptText(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function splitTranscriptTokens(value) {
+  return normalizeTranscriptText(value).split(/\s+/).filter(Boolean);
+}
+
+function mergeOverlappingTranscript(existing, incoming) {
+  const existingText = normalizeTranscriptText(existing);
+  const incomingText = normalizeTranscriptText(incoming);
+  if (!incomingText) return existingText;
+  if (!existingText) return incomingText;
+
+  const existingComparable = comparableTranscriptToken(existingText);
+  const incomingComparable = comparableTranscriptToken(incomingText);
+  if (!incomingComparable || existingComparable === incomingComparable || existingComparable.endsWith(incomingComparable)) {
+    return existingText;
+  }
+  if (incomingComparable.startsWith(existingComparable)) {
+    return incomingText;
+  }
+
+  const existingTokens = splitTranscriptTokens(existingText);
+  const incomingTokens = splitTranscriptTokens(incomingText);
+  const maxOverlap = Math.min(existingTokens.length, incomingTokens.length, 16);
+
+  for (let overlap = maxOverlap; overlap > 0; overlap--) {
+    const existingTail = existingTokens.slice(-overlap).map(comparableTranscriptToken).join(" ");
+    const incomingHead = incomingTokens.slice(0, overlap).map(comparableTranscriptToken).join(" ");
+    if (existingTail && existingTail === incomingHead) {
+      return normalizeTranscriptText([...existingTokens, ...incomingTokens.slice(overlap)].join(" "));
+    }
+  }
+
+  return `${existingText} ${incomingText}`;
+}
+
+function compactRepeatedTranscript(value) {
+  const text = normalizeTranscriptText(value);
+  if (!text) return "";
+
+  const sentenceMatches = text.match(/[^.!?]+[.!?]*/g);
+  if (!sentenceMatches || sentenceMatches.length < 2) return text;
+
+  const output = [];
+  for (const rawSentence of sentenceMatches) {
+    const sentence = normalizeTranscriptText(rawSentence);
+    if (!sentence) continue;
+
+    const comparableSentence = comparableTranscriptToken(sentence);
+    if (!comparableSentence) continue;
+
+    const recentlySeen = output
+      .slice(-12)
+      .some((existing) => comparableTranscriptToken(existing) === comparableSentence);
+
+    if (!recentlySeen) output.push(sentence);
+  }
+
+  return normalizeTranscriptText(output.join(" "));
+}
+
+function getLiveTranscriptSuffix(committedText, incomingText) {
+  const merged = mergeOverlappingTranscript(committedText, incomingText);
+  const committedTokens = splitTranscriptTokens(committedText);
+  const mergedTokens = splitTranscriptTokens(merged);
+  if (committedTokens.length > 0 && mergedTokens.length >= committedTokens.length) {
+    const committedComparable = committedTokens.map(comparableTranscriptToken).join(" ");
+    const mergedHeadComparable = mergedTokens.slice(0, committedTokens.length).map(comparableTranscriptToken).join(" ");
+    if (committedComparable === mergedHeadComparable) {
+      return normalizeTranscriptText(mergedTokens.slice(committedTokens.length).join(" "));
+    }
+  }
+  return normalizeTranscriptText(incomingText);
+}
+
+function applyTranscriptBufferToBlock(block, buffer, timestamp) {
+  const committedText = normalizeTranscriptText(buffer.committedText);
+  const liveText = normalizeTranscriptText(buffer.liveText);
+  const segments = [];
+
+  if (committedText) {
+    segments.push({ text: committedText, isFinal: true, timestamp });
+  }
+  if (liveText) {
+    segments.push({ text: liveText, isFinal: false, timestamp });
+  }
+
+  block.segments = segments;
+  block.content = normalizeTranscriptText([committedText, liveText].filter(Boolean).join(" "));
+  block.updatedAt = timestamp;
+  block.version += 1;
+}
+
+function finalizeTranscriptBlock(room, userName, block, buffer, roomId) {
+  const timestamp = Date.now();
+  buffer.committedText = normalizeTranscriptText(mergeOverlappingTranscript(buffer.committedText, buffer.liveText));
+  buffer.liveText = "";
+  applyTranscriptBufferToBlock(block, buffer, timestamp);
+  block.segments = block.segments.map((segment) => ({ ...segment, isFinal: true, timestamp }));
+  block.status = "final";
+  block.isLive = false;
+  block.isFinal = true;
+  block.ended_at = new Date(timestamp).toISOString();
+  io.to(roomId).emit("block-update", block);
+  room.activeSpeakers.delete(userName);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HR RECOVERY HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1092,25 +1206,11 @@ async function executeFinalTeardown(roomId, lastHrSocket, { reason = "hr-disconn
   io.to(roomId).emit("hr-recording-state", { roomId, isRecording: false });
   io.to(roomId).emit("room-closed", closedMessage);
 
-  const hasTranscript = (room.blocks || []).some(b => (b.content || "").trim());
-  const hasCandidate = room.candidateUser || room.lastCandidateUser;
-
   try {
-    if (hasTranscript && hasCandidate) {
-      // persistRoomTranscript now takes a status param — no double-write
-      await persistRoomTranscript(room, {
-        savedByUserId: lastHrSocket.data.userId,
-        reason,
-        status: closedStatus,
-        endedReason: closedReason,
-      });
-    } else {
-      await updateInterviewClosure(room, {
-        status: closedStatus,
-        reason: closedReason,
-        finalTranscript: "",
-      });
-    }
+    await updateInterviewClosure(room, {
+      status: closedStatus,
+      reason: closedReason,
+    });
     if (!intentional) {
       await rollbackUnadjournedVerification(room);
     }
@@ -1129,19 +1229,22 @@ async function executeFinalTeardown(roomId, lastHrSocket, { reason = "hr-disconn
   console.log(`[Teardown] Room ${roomId} fully cleaned up. intentional=${intentional}`);
 }
 
-function getCandidateTranscriptBlocks(room) {
+function getCandidateTranscriptBlocks(room, { includeRestored = true } = {}) {
   const candidateName = room?.candidateUser?.name || room?.lastCandidateUser?.name;
   return (room?.blocks || []).filter((block) => {
     const content = (block.content || "").trim();
+    if (!includeRestored && block.restoredFromHistory) return false;
     return content && (block.speakerRole === "candidate" || block.speakerName === candidateName);
   });
 }
 
 function buildFinalTranscript(room) {
-  return getCandidateTranscriptBlocks(room)
+  const transcript = getCandidateTranscriptBlocks(room)
     .map((block) => (block.content || "").trim())
     .filter(Boolean)
-    .join(" ");
+    .reduce((merged, content) => mergeOverlappingTranscript(merged, content), "");
+
+  return compactRepeatedTranscript(transcript);
 }
 
 function toIsoFromMillis(value) {
@@ -1169,7 +1272,7 @@ function mapFinalTranscriptForInsert(room, interviewId, finalTranscript) {
   };
 }
 
-async function persistRoomTranscript(room, { savedByUserId, reason = "manual", status = "completed", endedReason = "hr_ended" } = {}) {
+async function persistRoomTranscriptUnlocked(room, { savedByUserId, reason = "manual", status = "completed", endedReason = "hr_ended" } = {}) {
   const candidateUser = room?.candidateUser || room?.lastCandidateUser;
   if (!candidateUser?.authUserId) {
     throw new Error("Cannot persist transcript without a candidate user");
@@ -1253,6 +1356,28 @@ async function persistRoomTranscript(room, { savedByUserId, reason = "manual", s
   };
 }
 
+async function persistRoomTranscript(room, options = {}) {
+  const roomId = room?.roomId;
+  if (!roomId) {
+    return persistRoomTranscriptUnlocked(room, options);
+  }
+
+  const previous = transcriptPersistLocks.get(roomId) || Promise.resolve();
+  const current = previous
+    .catch(() => {})
+    .then(() => persistRoomTranscriptUnlocked(room, options));
+
+  transcriptPersistLocks.set(roomId, current);
+
+  try {
+    return await current;
+  } finally {
+    if (transcriptPersistLocks.get(roomId) === current) {
+      transcriptPersistLocks.delete(roomId);
+    }
+  }
+}
+
 
 async function loadLatestCandidateTranscript(candidateAuthUserId, currentInterviewId) {
   if (!candidateAuthUserId) return null;
@@ -1297,62 +1422,53 @@ async function loadLatestCandidateTranscript(candidateAuthUserId, currentIntervi
     return null;
   }
 
-  const blocks = (storedBlocks || []).length > 0
-    ? storedBlocks.map((block) => {
-        const createdAt = block.started_at ? new Date(block.started_at).getTime() : Date.now();
-        const updatedAt = block.ended_at ? new Date(block.ended_at).getTime() : createdAt;
-        return {
-          id: crypto.randomUUID(),
-          speakerId: "",
-          speakerName: block.speaker || "Candidate",
-          speakerRole: "candidate",
-          content: block.content || "",
-          segments: [{
-            text: block.content || "",
-            isFinal: true,
-            timestamp: updatedAt,
-            confidence: block.confidence ?? 1.0,
-          }],
-          status: "final",
-          isLive: false,
-          isFinal: true,
-          version: block.version || 1,
-          createdAt,
-          updatedAt,
-          editableBy: [],
-          roomId: "",
-          ...sourceMeta,
-        };
-      })
-    : [{
-        id: crypto.randomUUID(),
-        speakerId: "",
-        speakerName: "Candidate",
-        speakerRole: "candidate",
-        content: interview.final_transcript || "",
-        segments: [{
-          text: interview.final_transcript || "",
-          isFinal: true,
-          timestamp: new Date(sourceSavedAt).getTime(),
-          confidence: 1.0,
-        }],
-        status: "final",
-        isLive: false,
-        isFinal: true,
-        version: 1,
-        createdAt: new Date(sourceSavedAt).getTime(),
-        updatedAt: new Date(sourceSavedAt).getTime(),
-        editableBy: [],
-        roomId: "",
-        ...sourceMeta,
-      }];
+  const storedContent = (storedBlocks || [])
+    .map((block) => block.content || "")
+    .filter((content) => normalizeTranscriptText(content))
+    .reduce((merged, content) => mergeOverlappingTranscript(merged, content), "");
+  const canonicalContent = compactRepeatedTranscript(storedContent || interview.final_transcript || "");
+
+  if (!canonicalContent) return null;
+
+  const firstStoredBlock = storedBlocks?.[0];
+  const lastStoredBlock = storedBlocks?.[storedBlocks.length - 1];
+  const createdAt = firstStoredBlock?.started_at
+    ? new Date(firstStoredBlock.started_at).getTime()
+    : new Date(sourceSavedAt).getTime();
+  const updatedAt = lastStoredBlock?.ended_at
+    ? new Date(lastStoredBlock.ended_at).getTime()
+    : new Date(sourceSavedAt).getTime();
+  const version = (storedBlocks || []).reduce((max, block) => Math.max(max, block.version || 1), 1);
+
+  const blocks = [{
+    id: crypto.randomUUID(),
+    speakerId: "",
+    speakerName: firstStoredBlock?.speaker || "Candidate",
+    speakerRole: "candidate",
+    content: canonicalContent,
+    segments: [{
+      text: canonicalContent,
+      isFinal: true,
+      timestamp: updatedAt,
+      confidence: firstStoredBlock?.confidence ?? 1.0,
+    }],
+    status: "final",
+    isLive: false,
+    isFinal: true,
+    version,
+    createdAt,
+    updatedAt,
+    editableBy: [],
+    roomId: "",
+    ...sourceMeta,
+  }];
 
   return { interview, blocks, sourceMeta };
 }
 
 async function hydrateRoomWithLatestCandidateTranscript(roomId) {
   const room = getRoom(roomId);
-  if (!room?.candidateUser || !room.hrUser || room.blocks.length > 0) return false;
+  if (!room?.candidateUser || room.blocks.length > 0) return false;
 
   try {
     const latest = await loadLatestCandidateTranscript(room.candidateUser.authUserId, room.interviewSessionId);
@@ -1362,7 +1478,7 @@ async function hydrateRoomWithLatestCandidateTranscript(roomId) {
       ...block,
       speakerId: room.candidateUser.id,
       speakerName: room.candidateUser.name,
-      editableBy: [room.candidateUser.name, room.hrUser.name].filter(Boolean),
+      editableBy: [room.candidateUser.name, room.hrUser?.name].filter(Boolean),
       roomId,
     }));
     return true;
@@ -2010,6 +2126,7 @@ io.on("connection", (socket) => {
     createRoom(roomId, roomLanguage);
     joinRoom(roomId, socket.id, durableName, socket.data.userId, "candidate", socket.data.agoraUid);
     socket.join(roomId);
+    await hydrateRoomWithLatestCandidateTranscript(roomId);
 
     socket.emit("join-ack", { roomId, role: "candidate", language: roomLanguage });
     broadcastProjectedRoomState(roomId);
@@ -2248,7 +2365,7 @@ io.on("connection", (socket) => {
               sample_rate: 16000,
               channels: 1,
               interim_results: true,
-              endpointing: 300,
+              endpointing: 800,
               vad_events: true,
             });
             dgState.dgConnection = dgConnection;
@@ -2405,21 +2522,15 @@ io.on("connection", (socket) => {
     });
 
     dg.on(LiveTranscriptionEvents.Transcript, (data) => {
-
-
-
-
-
-      const transcript = data.channel.alternatives[0].transcript;
-      if (transcript && transcript.trim() && roomId) {
-        const isFinal = data.is_final === true || data.speech_final === true;
+      const transcript = normalizeTranscriptText(data?.channel?.alternatives?.[0]?.transcript);
+      if (transcript && roomId) {
+        const isFinal = data.is_final === true;
+        const isSpeechFinal = data.speech_final === true;
         const room = getRoom(roomId);
         if (!room) return;
 
-        // Turn Engine logic
         if (!room.activeSpeakers.has(userName)) {
-          const crypto = require('crypto');
-          const blockId = crypto.randomUUID(); // uuid v4
+          const blockId = crypto.randomUUID();
           
           const newBlock = {
             id: blockId,
@@ -2438,53 +2549,40 @@ io.on("connection", (socket) => {
             roomId: roomId
           };
           addBlock(roomId, newBlock);
-          room.activeSpeakers.set(userName, { blockId: blockId, committedSegments: [], liveSegment: null });
+          room.activeSpeakers.set(userName, { blockId, committedText: "", liveText: "" });
         }
 
         const buffer = room.activeSpeakers.get(userName);
         const block = room.blocks.find(b => b.id === buffer.blockId);
 
         if (block) {
-          if (!isFinal) {
-            buffer.liveSegment = { text: transcript.trim(), isFinal, timestamp: Date.now() };
-            block.segments = [...buffer.committedSegments, buffer.liveSegment];
+          const timestamp = Date.now();
+          if (isFinal || isSpeechFinal) {
+            buffer.committedText = mergeOverlappingTranscript(buffer.committedText, transcript);
+            buffer.liveText = "";
           } else {
-            buffer.committedSegments.push({ text: transcript.trim(), isFinal, timestamp: Date.now() });
-            console.log("Committed Segments:");
-            buffer.committedSegments.forEach((s, i) => {
-                console.log(i, JSON.stringify(s.text));
-            });
-            buffer.liveSegment = null;
-            block.segments = buffer.committedSegments;
+            buffer.liveText = getLiveTranscriptSuffix(buffer.committedText, transcript);
           }
 
-          console.log("================================");
-          console.log("FINAL:", isFinal);
-          console.log("TEXT:", transcript.trim());
-          block.content = block.segments.map(s => s.text).join(" ");
-          block.updatedAt = Date.now();
-          block.version += 1;
-
+          applyTranscriptBufferToBlock(block, buffer, timestamp);
           io.to(roomId).emit("block-update", block);
 
-          // Silence segmentation
-          if (isFinal) {
-            const timeoutKey = `${roomId}-${userName}`;
-            if (speakerTimeouts.has(timeoutKey)) clearTimeout(speakerTimeouts.get(timeoutKey));
-            
+          const timeoutKey = `${roomId}-${userName}`;
+          if (speakerTimeouts.has(timeoutKey)) clearTimeout(speakerTimeouts.get(timeoutKey));
+
+          if (isSpeechFinal) {
+            finalizeTranscriptBlock(room, userName, block, buffer, roomId);
+            speakerTimeouts.delete(timeoutKey);
+          } else if (isFinal) {
             speakerTimeouts.set(timeoutKey, setTimeout(() => {
-              const finalBlock = room.blocks.find(b => b.id === buffer.blockId);
-              if (finalBlock) {
-                finalBlock.status = "final";
-                finalBlock.isLive = false;
-                finalBlock.isFinal = true;
-                finalBlock.version += 1;
-                finalBlock.updatedAt = Date.now();
-                io.to(roomId).emit("block-update", finalBlock);
+              const activeRoom = getRoom(roomId);
+              const activeBuffer = activeRoom?.activeSpeakers.get(userName);
+              const finalBlock = activeRoom?.blocks.find(b => b.id === activeBuffer?.blockId);
+              if (activeRoom && activeBuffer && finalBlock) {
+                finalizeTranscriptBlock(activeRoom, userName, finalBlock, activeBuffer, roomId);
               }
-              room.activeSpeakers.delete(userName);
               speakerTimeouts.delete(timeoutKey);
-            }, 3000));
+            }, 2500));
           }
         }
       }
